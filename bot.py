@@ -11,9 +11,8 @@ from telegram.ext import (
 
 logging.basicConfig(level=logging.INFO)
 
-TOKEN = os.environ.get("TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID"))
-
+TOKEN = os.environ.get("TOKEN", "")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 albums = {}
 current_album = {}
 
