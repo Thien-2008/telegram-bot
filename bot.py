@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TOKEN", "")
 ADMIN_ID = os.environ.get("ADMIN_ID", "0")
 ADMIN_ID = int(ADMIN_ID) if ADMIN_ID.isdigit() else 0
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "khotailieu_A1_bot")
+BOT_USERNAME = "khotailieu_A1_bot"
 
 albums = {}
 current_album = {}
@@ -29,7 +29,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     key = args[0]
     if key not in albums or not albums[key]:
-        await update.message.reply_text("❌ Nội dung không tồn tại!")
+        await update.message.reply_text("❌ Nội dung không tồn tại hoặc đã hết hạn!")
         return
     chat_id = update.effective_chat.id
     sent_ids = []
@@ -133,12 +133,13 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     await update.message.reply_text(
-        "📖 Hướng dẫn:\n\n"
-        "/new_album — Tạo album mới\n"
-        "/done — Hoàn thành & lấy link\n"
-        "/list — Xem danh sách album\n"
-        "/del_album <key> — Xóa album\n\n"
-        "Sau /new_album, forward video/ảnh vào là tự lưu!"
+        "📖 Hướng dẫn sử dụng bot:\n\n"
+        "1️⃣ /new_album — Tạo album mới\n"
+        "2️⃣ Forward video/ảnh vào bot\n"
+        "3️⃣ /done — Lấy link chia sẻ\n"
+        "4️⃣ /list — Xem tất cả album\n"
+        "5️⃣ /del_album <key> — Xóa album\n\n"
+        "⏱ Video tự xóa sau 20 phút!"
     )
 
 def main():
