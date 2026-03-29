@@ -1,4 +1,4 @@
-# v2.0
+# v3.0
 import os
 import asyncio
 import random
@@ -15,10 +15,12 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TOKEN", "")
 ADMIN_ID = os.environ.get("ADMIN_ID", "0")
 ADMIN_ID = int(ADMIN_ID) if ADMIN_ID.isdigit() else 0
-BOT_USERNAME = "khotailieu_A1_bot"
 
 albums = {}
 current_album = {}
+
+def make_link(key):
+    return f"https://t.me/khotailieu_A1_bot?start={key}"
 
 def gen_key(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
@@ -83,7 +85,7 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if count == 0:
         await update.message.reply_text("⚠️ Album trống! Forward video/ảnh vào trước.")
         return
-    link = f"https://t.me/{BOT_USERNAME}?start={key}"
+    link = make_link(key)
     await update.message.reply_text(
         f"✅ Album `{key}` có {count} file!\n\n🔗 Link:\n{link}",
         parse_mode="Markdown"
@@ -99,7 +101,7 @@ async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📋 Danh sách album:\n\n"
     for key, items in albums.items():
         text += f"• `{key}` — {len(items)} file\n"
-        text += f"  https://t.me/{BOT_USERNAME}?start={key}\n\n"
+        text += f"  {make_link(key)}\n\n"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
