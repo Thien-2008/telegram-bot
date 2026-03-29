@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TOKEN", "")
 ADMIN_ID = os.environ.get("ADMIN_ID", "0")
 ADMIN_ID = int(ADMIN_ID) if ADMIN_ID.isdigit() else 0
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "khotailieu_A1_bot")
 
 albums = {}
 current_album = {}
@@ -79,10 +80,9 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     count = len(albums.get(key, []))
     if count == 0:
-        await update.message.reply_text("⚠️ Album trống!")
+        await update.message.reply_text("⚠️ Album trống! Forward video/ảnh vào trước.")
         return
-    bot_info = await context.bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start={key}"
+    link = f"https://t.me/{BOT_USERNAME}?start={key}"
     await update.message.reply_text(
         f"✅ Album `{key}` có {count} file!\n\n🔗 Link:\n{link}",
         parse_mode="Markdown"
@@ -95,11 +95,10 @@ async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not albums:
         await update.message.reply_text("Chưa có album nào!")
         return
-    bot_info = await context.bot.get_me()
     text = "📋 Danh sách album:\n\n"
     for key, items in albums.items():
         text += f"• `{key}` — {len(items)} file\n"
-        text += f"  https://t.me/{bot_info.username}?start={key}\n\n"
+        text += f"  https://t.me/{BOT_USERNAME}?start={key}\n\n"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
