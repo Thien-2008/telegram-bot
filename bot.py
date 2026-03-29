@@ -3,7 +3,7 @@ import asyncio
 import random
 import string
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes
@@ -12,7 +12,9 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ.get("TOKEN", "")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+ADMIN_ID = os.environ.get("ADMIN_ID", "0")
+ADMIN_ID = int(ADMIN_ID) if ADMIN_ID.isdigit() else 0
+
 albums = {}
 current_album = {}
 
@@ -24,15 +26,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         await update.message.reply_text("⚠️ Vui lòng bấm đúng link!")
         return
-
     key = args[0]
     if key not in albums or not albums[key]:
         await update.message.reply_text("❌ Nội dung không tồn tại!")
         return
-
     chat_id = update.effective_chat.id
     sent_ids = []
-
     for item in albums[key]:
         try:
             if item["type"] == "video":
@@ -50,7 +49,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent_ids.append(msg.message_id)
         except Exception as e:
             logging.error(f"Send error: {e}")
-
     asyncio.create_task(delete_after(context, chat_id, sent_ids, 1200))
 
 async def delete_after(context, chat_id, message_ids, delay):
@@ -68,9 +66,7 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_album["key"] = key
     albums[key] = []
     await update.message.reply_text(
-        f"📁 Album mới: `{key}`\n\n"
-        f"Forward video/ảnh vào đây!\n"
-        f"Gõ /done khi xong.",
+        f"📁 Album mới: `{key}`\n\nForward video/ảnh vào!\nGõ /done khi xong.",
         parse_mode="Markdown"
     )
 
@@ -83,13 +79,12 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     count = len(albums.get(key, []))
     if count == 0:
-        await update.message.reply_text("⚠️ Album trống! Forward video/ảnh vào trước.")
+        await update.message.reply_text("⚠️ Album trống!")
         return
     bot_info = await context.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={key}"
     await update.message.reply_text(
-        f"✅ Album `{key}` có {count} file!\n\n"
-        f"🔗 Link chia sẻ:\n{link}",
+        f"✅ Album `{key}` có {count} file!\n\n🔗 Link:\n{link}",
         parse_mode="Markdown"
     )
     current_album.clear()
@@ -100,8 +95,8 @@ async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not albums:
         await update.message.reply_text("Chưa có album nào!")
         return
-    text = "📋 Danh sách album:\n\n"
     bot_info = await context.bot.get_me()
+    text = "📋 Danh sách album:\n\n"
     for key, items in albums.items():
         text += f"• `{key}` — {len(items)} file\n"
         text += f"  https://t.me/{bot_info.username}?start={key}\n\n"
@@ -118,7 +113,7 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del albums[key]
         await update.message.reply_text(f"🗑 Đã xóa album `{key}`!", parse_mode="Markdown")
     else:
-        await update.message.reply_text("❌ Không tìm thấy album!")
+        await update.message.reply_text("❌ Không tìm thấy!")
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -127,15 +122,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not key:
         return
     if update.message.video:
-        albums[key].append({
-            "type": "video",
-            "file_id": update.message.video.file_id
-        })
+        albums[key].append({"type": "video", "file_id": update.message.video.file_id})
     elif update.message.photo:
-        albums[key].append({
-            "type": "photo",
-            "file_id": update.message.photo[-1].file_id
-        })
+        albums[key].append({"type": "photo", "file_id": update.message.photo[-1].file_id})
     else:
         return
     count = len(albums[key])
