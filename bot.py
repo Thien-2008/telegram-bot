@@ -1,4 +1,4 @@
-# v6.0
+# v7.0
 import os
 import asyncio
 import random
@@ -9,16 +9,19 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes
 )
+from motor.motor_asyncio import AsyncIOMotorClient
 
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ.get("TOKEN", "")
 ADMIN_ID = os.environ.get("ADMIN_ID", "0")
 ADMIN_ID = int(ADMIN_ID) if ADMIN_ID.isdigit() else 0
+MONGO_URI = os.environ.get("MONGO_URI", "")
 CHANNEL_LINK = "https://t.me/+rmpfiQeaToAyYzhl"
 
-albums = {}
-current_album = {}
+client = AsyncIOMotorClient(MONGO_URI)
+db = client["botdb"]
+albums_col = db["albums"]
 
 def make_link(key):
     return "https://t.me/khotailieu_A1_bot?start=" + key
@@ -30,23 +33,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
         await update.message.reply_text(
-            "Ủa Ní ơi 👋\n\n"
+            "Ủa Ní ơi\n\n"
             "Ní chưa chọn link video nào hết á \n\n"
             "Vào kênh bên dưới để chọn video muốn xem nhé:\n"
             "👉 " + CHANNEL_LINK
         )
         return
     key = args[0]
-    if key not in albums or not albums[key]:
+    album = await albums_col.find_one({"key": key})
+    if not album or not album.get("items"):
         await update.message.reply_text(
-            "Ní ơi, link này không còn nữa rồi 😢\n\n"
+            "Ní ơi, link này không còn nữa rồ 😢\n\n"
             "Vào kênh để lấy link mới nhé:\n"
             "👉 " + CHANNEL_LINK
         )
         return
     chat_id = update.effective_chat.id
     sent_ids = []
-    for item in albums[key]:
+    for item in album["items"]:
         try:
             if item["type"] == "video":
                 msg = await context.bot.send_video(
@@ -81,8 +85,8 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     key = gen_key()
-    current_album["key"] = key
-    albums[key] = []
+    await albums_col.insert_one({"key": key, "items": []})
+    context.user_data["current_key"] = key
     await update.message.reply_text(
         "📁 Album mới: " + key + "\n\n"
         "Forward video/ảnh vào!\n"
@@ -92,11 +96,12 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    key = current_album.get("key")
+    key = context.user_data.get("current_key")
     if not key:
         await update.message.reply_text("⚠️ Chưa tạo album! Gõ /new_album trước.")
         return
-    count = len(albums.get(key, []))
+    album = await albums_col.find_one({"key": key})
+    count = len(album.get("items", [])) if album else 0
     if count == 0:
         await update.message.reply_text("⚠️ Album trống! Forward video/ảnh vào trước.")
         return
@@ -105,17 +110,20 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Xong! Album có " + str(count) + " file!\n\n"
         "🔗 Link chia sẻ:\n" + link
     )
-    current_album.clear()
+    context.user_data.pop("current_key", None)
 
 async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
+    albums = await albums_col.find().to_list(length=100)
     if not albums:
         await update.message.reply_text("Chưa có album nào!")
         return
     text = "📋 Danh sách album:\n\n"
-    for key, items in albums.items():
-        text += "• " + key + " — " + str(len(items)) + " file\n"
+    for album in albums:
+        key = album["key"]
+        count = len(album.get("items", []))
+        text += "• " + key + " — " + str(count) + " file\n"
         text += "  " + make_link(key) + "\n\n"
     await update.message.reply_text(text)
 
@@ -126,8 +134,8 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Dùng: /del_album <key>")
         return
     key = context.args[0]
-    if key in albums:
-        del albums[key]
+    result = await albums_col.delete_one({"key": key})
+    if result.deleted_count:
         await update.message.reply_text("🗑 Đã xóa album " + key + "!")
     else:
         await update.message.reply_text("❌ Không tìm thấy!")
@@ -135,16 +143,19 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    key = current_album.get("key")
+    key = context.user_data.get("current_key")
     if not key:
         return
+    item = None
     if update.message.video:
-        albums[key].append({"type": "video", "file_id": update.message.video.file_id})
+        item = {"type": "video", "file_id": update.message.video.file_id}
     elif update.message.photo:
-        albums[key].append({"type": "photo", "file_id": update.message.photo[-1].file_id})
-    else:
+        item = {"type": "photo", "file_id": update.message.photo[-1].file_id}
+    if not item:
         return
-    count = len(albums[key])
+    await albums_col.update_one({"key": key}, {"$push": {"items": item}})
+    album = await albums_col.find_one({"key": key})
+    count = len(album.get("items", []))
     await update.message.reply_text(
         "✅ Đã lưu! Album " + key + " có " + str(count) + " file."
     )
