@@ -1,4 +1,4 @@
-# v3.0
+# v4.0
 import os
 import asyncio
 import random
@@ -20,7 +20,7 @@ albums = {}
 current_album = {}
 
 def make_link(key):
-    return f"https://t.me/khotailieu_A1_bot?start={key}"
+    return "https://t.me/khotailieu_A1_bot?start=" + key
 
 def gen_key(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
@@ -70,8 +70,7 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_album["key"] = key
     albums[key] = []
     await update.message.reply_text(
-        f"📁 Album mới: `{key}`\n\nForward video/ảnh vào!\nGõ /done khi xong.",
-        parse_mode="Markdown"
+        "📁 Album mới: " + key + "\n\nForward video/ảnh vào!\nGõ /done khi xong."
     )
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,8 +86,7 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     link = make_link(key)
     await update.message.reply_text(
-        f"✅ Album `{key}` có {count} file!\n\n🔗 Link:\n{link}",
-        parse_mode="Markdown"
+        "✅ Album có " + str(count) + " file!\n\n🔗 Link:\n" + link
     )
     current_album.clear()
 
@@ -100,9 +98,9 @@ async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = "📋 Danh sách album:\n\n"
     for key, items in albums.items():
-        text += f"• `{key}` — {len(items)} file\n"
-        text += f"  {make_link(key)}\n\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
+        text += "• " + key + " — " + str(len(items)) + " file\n"
+        text += "  " + make_link(key) + "\n\n"
+    await update.message.reply_text(text)
 
 async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -113,7 +111,7 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = context.args[0]
     if key in albums:
         del albums[key]
-        await update.message.reply_text(f"🗑 Đã xóa album `{key}`!", parse_mode="Markdown")
+        await update.message.reply_text("🗑 Đã xóa album " + key + "!")
     else:
         await update.message.reply_text("❌ Không tìm thấy!")
 
@@ -130,19 +128,19 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
     count = len(albums[key])
-    await update.message.reply_text(f"✅ Đã lưu! Album `{key}` có {count} file.", parse_mode="Markdown")
+    await update.message.reply_text("✅ Đã lưu! Album " + key + " có " + str(count) + " file.")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     await update.message.reply_text(
         "📖 Hướng dẫn sử dụng bot:\n\n"
-        "1️⃣ /new_album — Tạo album mới\n"
-        "2️⃣ Forward video/ảnh vào bot\n"
-        "3️⃣ /done — Lấy link chia sẻ\n"
-        "4️⃣ /list — Xem tất cả album\n"
-        "5️⃣ /del_album <key> — Xóa album\n\n"
-        "⏱ Video tự xóa sau 20 phút!"
+        "1. /new_album — Tạo album mới\n"
+        "2. Forward video/ảnh vào bot\n"
+        "3. /done — Lấy link chia sẻ\n"
+        "4. /list — Xem tất cả album\n"
+        "5. /del_album <key> — Xóa album\n\n"
+        "Video tự xóa sau 20 phút!"
     )
 
 def main():
