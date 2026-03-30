@@ -1,4 +1,4 @@
-# v4.0
+# v6.0
 import os
 import asyncio
 import random
@@ -15,6 +15,7 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TOKEN", "")
 ADMIN_ID = os.environ.get("ADMIN_ID", "0")
 ADMIN_ID = int(ADMIN_ID) if ADMIN_ID.isdigit() else 0
+CHANNEL_LINK = "https://t.me/+rmpfiQeaToAyYzhl"
 
 albums = {}
 current_album = {}
@@ -28,11 +29,20 @@ def gen_key(length=8):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
-        await update.message.reply_text("⚠️ Vui lòng bấm đúng link!")
+        await update.message.reply_text(
+            "Ủa Ní ơi 👋\n\n"
+            "Ní chưa chọn link video nào hết á \n\n"
+            "Vào kênh bên dưới để chọn video muốn xem nhé:\n"
+            "👉 " + CHANNEL_LINK
+        )
         return
     key = args[0]
     if key not in albums or not albums[key]:
-        await update.message.reply_text("❌ Nội dung không tồn tại hoặc đã hết hạn!")
+        await update.message.reply_text(
+            "Ní ơi, link này không còn nữa rồi 😢\n\n"
+            "Vào kênh để lấy link mới nhé:\n"
+            "👉 " + CHANNEL_LINK
+        )
         return
     chat_id = update.effective_chat.id
     sent_ids = []
@@ -53,6 +63,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent_ids.append(msg.message_id)
         except Exception as e:
             logging.error(f"Send error: {e}")
+    await update.message.reply_text(
+        "Xem nhanh lên Ní ơi! ⏳\n"
+        "Nội dung sẽ tự xóa sau 20 phút nhé! 🔥"
+    )
     asyncio.create_task(delete_after(context, chat_id, sent_ids, 1200))
 
 async def delete_after(context, chat_id, message_ids, delay):
@@ -70,7 +84,9 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_album["key"] = key
     albums[key] = []
     await update.message.reply_text(
-        "📁 Album mới: " + key + "\n\nForward video/ảnh vào!\nGõ /done khi xong."
+        "📁 Album mới: " + key + "\n\n"
+        "Forward video/ảnh vào!\n"
+        "Gõ /done khi xong."
     )
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,7 +102,8 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     link = make_link(key)
     await update.message.reply_text(
-        "✅ Album có " + str(count) + " file!\n\n🔗 Link:\n" + link
+        "✅ Xong! Album có " + str(count) + " file!\n\n"
+        "🔗 Link chia sẻ:\n" + link
     )
     current_album.clear()
 
@@ -128,7 +145,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
     count = len(albums[key])
-    await update.message.reply_text("✅ Đã lưu! Album " + key + " có " + str(count) + " file.")
+    await update.message.reply_text(
+        "✅ Đã lưu! Album " + key + " có " + str(count) + " file."
+    )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
