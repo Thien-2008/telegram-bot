@@ -1,4 +1,4 @@
-# v7.0
+# v8.0
 import os
 import asyncio
 import random
@@ -33,7 +33,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
         await update.message.reply_text(
-            "Ủa Ní ơi\n\n"
+            "Ủa Ní ơi \n\n"
             "Ní chưa chọn link video nào hết á \n\n"
             "Vào kênh bên dưới để chọn video muốn xem nhé:\n"
             "👉 " + CHANNEL_LINK
@@ -43,7 +43,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     album = await albums_col.find_one({"key": key})
     if not album or not album.get("items"):
         await update.message.reply_text(
-            "Ní ơi, link này không còn nữa rồ 😢\n\n"
+            "Ní ơi, link này không còn nữa gòi 😢\n\n"
             "Vào kênh để lấy link mới nhé:\n"
             "👉 " + CHANNEL_LINK
         )
@@ -68,8 +68,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"Send error: {e}")
     await update.message.reply_text(
-        "Xem nhanh lên Ní ơi! ⏳\n"
-        "Nội dung sẽ tự xóa sau 20 phút nhé! 🔥"
+        "Xem nhanh lên Ní ơi⏳\n"
+        "Nội dung sẽ tự xóa sau 20 phút đó nhe"
     )
     asyncio.create_task(delete_after(context, chat_id, sent_ids, 1200))
 
@@ -174,7 +174,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder()\
+        .token(TOKEN)\
+        .connect_timeout(30)\
+        .read_timeout(30)\
+        .write_timeout(30)\
+        .build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("new_album", new_album))
     app.add_handler(CommandHandler("done", done))
@@ -182,7 +187,7 @@ def main():
     app.add_handler(CommandHandler("del_album", delete_album))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
