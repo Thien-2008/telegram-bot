@@ -1,4 +1,4 @@
-# v8.0
+# v9.0
 import os
 import asyncio
 import random
@@ -40,7 +40,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     key = args[0]
-    album = await albums_col.find_one({"key": key})
+    try:
+        album = await albums_col.find_one({"key": key})
+    except Exception as e:
+        logging.error(f"DB error: {e}")
+        await update.message.reply_text("Lỗi kết nối, thử lại sau nhé Ní!")
+        return
     if not album or not album.get("items"):
         await update.message.reply_text(
             "Ní ơi, link này không còn nữa gòi 😢\n\n"
@@ -68,8 +73,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"Send error: {e}")
     await update.message.reply_text(
-        "Xem nhanh lên Ní ơi⏳\n"
-        "Nội dung sẽ tự xóa sau 20 phút đó nhe"
+        "Xem nhanh lên Ní ơi! ⏳\n"
+        "Nội dung sẽ tự xóa sau 20 phút đó nhe! 🔥"
     )
     asyncio.create_task(delete_after(context, chat_id, sent_ids, 1200))
 
@@ -115,7 +120,11 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    albums = await albums_col.find().to_list(length=100)
+    try:
+        albums = await albums_col.find().to_list(length=100)
+    except Exception as e:
+        await update.message.reply_text("Lỗi kết nối DB!")
+        return
     if not albums:
         await update.message.reply_text("Chưa có album nào!")
         return
@@ -173,9 +182,14 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Video tự xóa sau 20 phút!"
     )
 
+async def post_init(application):
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    logging.info("Webhook deleted, bot started!")
+
 def main():
     app = Application.builder()\
         .token(TOKEN)\
+        .post_init(post_init)\
         .connect_timeout(30)\
         .read_timeout(30)\
         .write_timeout(30)\
