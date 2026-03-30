@@ -1,10 +1,11 @@
-# v9.0
+# v9.1 - Fixed Conflict + Timeout + Error handling
 import os
 import asyncio
 import random
 import string
 import logging
 from telegram import Update
+from telegram.error import Conflict, TimedOut, NetworkError
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes
@@ -33,8 +34,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
         await update.message.reply_text(
-            "Ủa Ní ơi \n\n"
-            "Ní chưa chọn link video nào hết á \n\n"
+            "Ủa Ní ơi! 👋\n\n"
+            "Ní chưa chọn link video nào hết á 😄\n\n"
             "Vào kênh bên dưới để chọn video muốn xem nhé:\n"
             "👉 " + CHANNEL_LINK
         )
@@ -182,9 +183,22 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Video tự xóa sau 20 phút!"
     )
 
+async def error_handler(update, context):
+    error = context.error
+    if isinstance(error, Conflict):
+        logging.warning("Conflict: instance cũ chưa tắt, chờ...")
+        await asyncio.sleep(5)
+    elif isinstance(error, TimedOut):
+        logging.warning("TimedOut: bỏ qua")
+    elif isinstance(error, NetworkError):
+        logging.warning(f"NetworkError: {error}")
+    else:
+        logging.error(f"Lỗi khác: {error}")
+
 async def post_init(application):
+    await asyncio.sleep(3)  # Chờ instance cũ tắt hẳn
     await application.bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Webhook deleted, bot started!")
+    logging.info("✅ Bot started!")
 
 def main():
     app = Application.builder()\
@@ -201,7 +215,11 @@ def main():
     app.add_handler(CommandHandler("del_album", delete_album))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
-    app.run_polling(drop_pending_updates=True)
+    app.add_error_handler(error_handler)
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
+    )
 
 if __name__ == "__main__":
     main()
