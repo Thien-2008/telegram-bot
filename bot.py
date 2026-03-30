@@ -1,11 +1,12 @@
-# v9.1 - Fixed Conflict + Timeout + Error handling
+# v10.0
 import os
 import asyncio
 import random
 import string
 import logging
+import threading
+from flask import Flask
 from telegram import Update
-from telegram.error import Conflict, TimedOut, NetworkError
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes
@@ -19,10 +20,20 @@ ADMIN_ID = os.environ.get("ADMIN_ID", "0")
 ADMIN_ID = int(ADMIN_ID) if ADMIN_ID.isdigit() else 0
 MONGO_URI = os.environ.get("MONGO_URI", "")
 CHANNEL_LINK = "https://t.me/+rmpfiQeaToAyYzhl"
+PORT = int(os.environ.get("PORT", 8080))
 
 client = AsyncIOMotorClient(MONGO_URI)
 db = client["botdb"]
 albums_col = db["albums"]
+
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def index():
+    return "Bot is running!", 200
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=PORT)
 
 def make_link(key):
     return "https://t.me/khotailieu_A1_bot?start=" + key
@@ -183,24 +194,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Video tự xóa sau 20 phút!"
     )
 
-async def error_handler(update, context):
-    error = context.error
-    if isinstance(error, Conflict):
-        logging.warning("Conflict: instance cũ chưa tắt, chờ...")
-        await asyncio.sleep(5)
-    elif isinstance(error, TimedOut):
-        logging.warning("TimedOut: bỏ qua")
-    elif isinstance(error, NetworkError):
-        logging.warning(f"NetworkError: {error}")
-    else:
-        logging.error(f"Lỗi khác: {error}")
-
 async def post_init(application):
-    await asyncio.sleep(3)  # Chờ instance cũ tắt hẳn
     await application.bot.delete_webhook(drop_pending_updates=True)
-    logging.info("✅ Bot started!")
+    logging.info("Bot started!")
 
 def main():
+    t = threading.Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
     app = Application.builder()\
         .token(TOKEN)\
         .post_init(post_init)\
@@ -215,11 +217,7 @@ def main():
     app.add_handler(CommandHandler("del_album", delete_album))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
-    app.add_error_handler(error_handler)
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
