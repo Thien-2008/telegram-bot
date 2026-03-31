@@ -1,4 +1,4 @@
-# v11.0 - Compatible with python-telegram-bot==21.3
+# v11.1 - Fix Conflict error
 import os
 import asyncio
 import random
@@ -194,14 +194,20 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Video tự xóa sau 20 phút!"
     )
 
+async def post_init(app):
+    # ✅ Xóa webhook + drop updates cũ khi khởi động → tránh Conflict
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    logging.info("✅ Bot started! Webhook cleared.")
+
 def main():
-    # Flask chạy background
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    # ✅ PTB 21.x compatible - không dùng post_init, timeout
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder()\
+        .token(TOKEN)\
+        .post_init(post_init)\
+        .build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("new_album", new_album))
@@ -211,7 +217,6 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
 
-    logging.info("Bot started!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
