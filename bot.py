@@ -1,4 +1,4 @@
-# v10.0
+# v10.1
 import os
 import asyncio
 import random
@@ -203,12 +203,10 @@ def main():
     t.daemon = True
     t.start()
 
+    # ✅ Bỏ .connect_timeout/.read_timeout/.write_timeout (không tương thích v20.7)
     app = Application.builder()\
         .token(TOKEN)\
         .post_init(post_init)\
-        .connect_timeout(30)\
-        .read_timeout(30)\
-        .write_timeout(30)\
         .build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("new_album", new_album))
