@@ -1,4 +1,4 @@
-# v11.4 - Ultra fix Conflict: retry loop
+# v11.5 - Ultra fix + notify after delete
 import os
 import asyncio
 import random
@@ -44,7 +44,6 @@ def gen_key(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def force_delete_webhook():
-    """Xóa webhook + drop pending updates"""
     for attempt in range(5):
         try:
             url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -102,11 +101,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent_ids.append(msg.message_id)
         except Exception as e:
             logging.error(f"Send error: {e}")
-    await update.message.reply_text(
+
+    # ✅ Gửi tin nhắn báo sẽ xóa sau 20p, lưu message_id để xóa luôn
+    notice = await update.message.reply_text(
         "Xem nhanh lên Ní ơi! ⏳\n"
         "Nội dung sẽ tự xóa sau 20 phút đó nhe! 🔥"
     )
-    asyncio.create_task(delete_after(context, chat_id, sent_ids, 1200))
+    asyncio.create_task(delete_after(context, chat_id, sent_ids + [notice.message_id], 1200))
 
 async def delete_after(context, chat_id, message_ids, delay):
     await asyncio.sleep(delay)
@@ -115,6 +116,16 @@ async def delete_after(context, chat_id, message_ids, delay):
             await context.bot.delete_message(chat_id=chat_id, message_id=mid)
         except Exception as e:
             logging.error(f"Delete error: {e}")
+    # ✅ Sau khi xóa xong → thông báo cho user
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⏰ Đã 20 phút, nội dung đã bị xóa!\n\n"
+                 "Vui lòng vào kênh để lấy link mới nhé:\n"
+                 "👉 " + CHANNEL_LINK
+        )
+    except Exception as e:
+        logging.error(f"Notify error: {e}")
 
 async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -213,7 +224,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def run_bot():
-    """Chạy bot với retry khi bị Conflict"""
     while True:
         try:
             force_delete_webhook()
@@ -235,7 +245,6 @@ def main():
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
-
     run_bot()
 
 if __name__ == "__main__":
