@@ -1,4 +1,4 @@
-# v10.1
+# v11.0 - Compatible with python-telegram-bot==21.3
 import os
 import asyncio
 import random
@@ -194,20 +194,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Video tự xóa sau 20 phút!"
     )
 
-async def post_init(application):
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Bot started!")
-
 def main():
+    # Flask chạy background
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    # ✅ Bỏ .connect_timeout/.read_timeout/.write_timeout (không tương thích v20.7)
-    app = Application.builder()\
-        .token(TOKEN)\
-        .post_init(post_init)\
-        .build()
+    # ✅ PTB 21.x compatible - không dùng post_init, timeout
+    app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("new_album", new_album))
     app.add_handler(CommandHandler("done", done))
@@ -215,6 +210,8 @@ def main():
     app.add_handler(CommandHandler("del_album", delete_album))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
+
+    logging.info("Bot started!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
