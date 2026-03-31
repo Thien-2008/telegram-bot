@@ -1,10 +1,11 @@
-# v11.1 - Fix Conflict error
+# v11.2 - Fix Conflict with delay
 import os
 import asyncio
 import random
 import string
 import logging
 import threading
+import time
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -194,20 +195,16 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Video tự xóa sau 20 phút!"
     )
 
-async def post_init(app):
-    # ✅ Xóa webhook + drop updates cũ khi khởi động → tránh Conflict
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    logging.info("✅ Bot started! Webhook cleared.")
-
 def main():
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    app = Application.builder()\
-        .token(TOKEN)\
-        .post_init(post_init)\
-        .build()
+    # ✅ Delay 5 giây để instance cũ chết hẳn trước khi start polling
+    logging.info("Waiting 5s for old instance to die...")
+    time.sleep(5)
+
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("new_album", new_album))
@@ -217,6 +214,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
 
+    logging.info("Bot started!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
