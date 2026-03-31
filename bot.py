@@ -1,4 +1,4 @@
-# v11.2 - Fix Conflict with delay
+# v11.3 - Fix Conflict: force delete webhook via HTTP before polling
 import os
 import asyncio
 import random
@@ -6,6 +6,7 @@ import string
 import logging
 import threading
 import time
+import requests
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -41,6 +42,16 @@ def make_link(key):
 
 def gen_key(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+
+def force_delete_webhook():
+    """Xóa webhook + drop pending updates trước khi polling"""
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true"
+        r = requests.get(url, timeout=10)
+        logging.info(f"deleteWebhook: {r.json()}")
+        time.sleep(3)
+    except Exception as e:
+        logging.error(f"deleteWebhook error: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -196,16 +207,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def main():
+    # Flask
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    # ✅ Delay 5 giây để instance cũ chết hẳn trước khi start polling
-    logging.info("Waiting 5s for old instance to die...")
-    time.sleep(5)
+    # ✅ Xóa webhook qua HTTP trước khi polling → tránh Conflict vĩnh viễn
+    force_delete_webhook()
 
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("new_album", new_album))
     app.add_handler(CommandHandler("done", done))
