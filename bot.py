@@ -1,4 +1,4 @@
-# v11.3 - Fix Conflict: force delete webhook via HTTP before polling
+# v11.4 - Ultra fix Conflict: retry loop
 import os
 import asyncio
 import random
@@ -44,14 +44,20 @@ def gen_key(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def force_delete_webhook():
-    """Xóa webhook + drop pending updates trước khi polling"""
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true"
-        r = requests.get(url, timeout=10)
-        logging.info(f"deleteWebhook: {r.json()}")
+    """Xóa webhook + drop pending updates"""
+    for attempt in range(5):
+        try:
+            url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true"
+            r = requests.get(url, timeout=10)
+            result = r.json()
+            logging.info(f"deleteWebhook attempt {attempt+1}: {result}")
+            if result.get("ok"):
+                time.sleep(5)
+                return True
+        except Exception as e:
+            logging.error(f"deleteWebhook error: {e}")
         time.sleep(3)
-    except Exception as e:
-        logging.error(f"deleteWebhook error: {e}")
+    return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -206,26 +212,31 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Video tự xóa sau 20 phút!"
     )
 
+def run_bot():
+    """Chạy bot với retry khi bị Conflict"""
+    while True:
+        try:
+            force_delete_webhook()
+            app = Application.builder().token(TOKEN).build()
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("new_album", new_album))
+            app.add_handler(CommandHandler("done", done))
+            app.add_handler(CommandHandler("list", list_albums))
+            app.add_handler(CommandHandler("del_album", delete_album))
+            app.add_handler(CommandHandler("help", help_cmd))
+            app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
+            logging.info("✅ Bot started!")
+            app.run_polling(drop_pending_updates=True)
+        except Exception as e:
+            logging.error(f"Bot crashed: {e} — restarting in 10s...")
+            time.sleep(10)
+
 def main():
-    # Flask
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    # ✅ Xóa webhook qua HTTP trước khi polling → tránh Conflict vĩnh viễn
-    force_delete_webhook()
-
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("new_album", new_album))
-    app.add_handler(CommandHandler("done", done))
-    app.add_handler(CommandHandler("list", list_albums))
-    app.add_handler(CommandHandler("del_album", delete_album))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.PHOTO, handle_media))
-
-    logging.info("Bot started!")
-    app.run_polling(drop_pending_updates=True)
+    run_bot()
 
 if __name__ == "__main__":
     main()
