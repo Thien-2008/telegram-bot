@@ -101,13 +101,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent_ids.append(msg.message_id)
         except Exception as e:
             logging.error(f"Send error: {e}")
-
-    # ✅ Gửi tin nhắn báo sẽ xóa sau 20p, lưu message_id để xóa luôn
     notice = await update.message.reply_text(
         "Xem nhanh lên Ní ơi! ⏳\n"
         "Nội dung sẽ tự xóa sau 20 phút đó nhe! 🔥"
     )
-    asyncio.create_task(delete_after(context, chat_id, sent_ids + [notice.message_id], 1200))
+    sent_ids.append(notice.message_id)
+    asyncio.create_task(delete_after(context, chat_id, sent_ids, 1200))
 
 async def delete_after(context, chat_id, message_ids, delay):
     await asyncio.sleep(delay)
@@ -116,12 +115,11 @@ async def delete_after(context, chat_id, message_ids, delay):
             await context.bot.delete_message(chat_id=chat_id, message_id=mid)
         except Exception as e:
             logging.error(f"Delete error: {e}")
-    # ✅ Sau khi xóa xong → thông báo cho user
     try:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="⏰ Đã 20 phút, nội dung đã bị xóa!\n\n"
-                 "Vui lòng vào kênh để lấy link mới nhé:\n"
+            text="⏰ Nội dung đã hết hạn rồi Ní ơi!\n\n"
+                 "Vào kênh để lấy link mới nhé:\n"
                  "👉 " + CHANNEL_LINK
         )
     except Exception as e:
