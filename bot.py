@@ -225,6 +225,8 @@ def run_bot():
     while True:
         try:
             force_delete_webhook()
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             app = Application.builder().token(TOKEN).build()
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("new_album", new_album))
@@ -238,7 +240,6 @@ def run_bot():
         except Exception as e:
             logging.error(f"Bot crashed: {e} — restarting in 10s...")
             time.sleep(10)
-
 def main():
     t = threading.Thread(target=run_flask)
     t.daemon = True
