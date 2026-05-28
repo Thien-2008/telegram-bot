@@ -483,46 +483,49 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Đã thêm file vào album.")
 
 # ==================== RUN BOT ====================
+async def post_init(application: Application):
+    """Khởi tạo DB trong đúng event loop của bot."""
+    client = AsyncIOMotorClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=5000
+    )
+    db = client["botdb"]
+    application.bot_data["albums_col"] = db["albums"]
+    application.bot_data["banned_col"] = db["banned"]
+    logging.info("✅ DB connected!")
+
 def run_bot():
     while True:
         try:
             force_delete_webhook()
 
-            async def main_bot():
-                client = AsyncIOMotorClient(
-                    MONGO_URI,
-                    serverSelectionTimeoutMS=5000
-                )
-                db         = client["botdb"]
-                albums_col = db["albums"]
-                banned_col = db["banned"]
+            app = (
+                Application.builder()
+                .token(TOKEN)
+                .post_init(post_init)
+                .build()
+            )
 
-                app = Application.builder().token(TOKEN).build()
-                app.bot_data["albums_col"] = albums_col
-                app.bot_data["banned_col"] = banned_col
+            # User
+            app.add_handler(CommandHandler("start", start))
 
-                # User
-                app.add_handler(CommandHandler("start", start))
+            # Admin
+            app.add_handler(CommandHandler(["new_album", "new"], new_album))
+            app.add_handler(CommandHandler("done",   done))
+            app.add_handler(CommandHandler("list",   list_albums))
+            app.add_handler(CommandHandler("check",  check_album))
+            app.add_handler(CommandHandler(["del_album", "del"], delete_album))
+            app.add_handler(CommandHandler("clean",  clean_albums))
+            app.add_handler(CommandHandler("status", status_cmd))
+            app.add_handler(CommandHandler("ban",    ban_user))
+            app.add_handler(CommandHandler("unban",  unban_user))
+            app.add_handler(CommandHandler("help",   help_cmd))
+            app.add_handler(MessageHandler(
+                filters.VIDEO | filters.PHOTO, handle_media
+            ))
 
-                # Admin
-                app.add_handler(CommandHandler(["new_album", "new"], new_album))
-                app.add_handler(CommandHandler("done",   done))
-                app.add_handler(CommandHandler("list",   list_albums))
-                app.add_handler(CommandHandler("check",  check_album))
-                app.add_handler(CommandHandler(["del_album", "del"], delete_album))
-                app.add_handler(CommandHandler("clean",  clean_albums))
-                app.add_handler(CommandHandler("status", status_cmd))
-                app.add_handler(CommandHandler("ban",    ban_user))
-                app.add_handler(CommandHandler("unban",  unban_user))
-                app.add_handler(CommandHandler("help",   help_cmd))
-                app.add_handler(MessageHandler(
-                    filters.VIDEO | filters.PHOTO, handle_media
-                ))
-
-                logging.info("✅ Bot started!")
-                await app.run_polling(drop_pending_updates=True)
-
-            asyncio.run(main_bot())
+            logging.info("✅ Bot started!")
+            app.run_polling(drop_pending_updates=True)  # Tự quản lý event loop
 
         except Exception as e:
             logging.error(f"Bot crashed: {e} — restarting in 10s...")
