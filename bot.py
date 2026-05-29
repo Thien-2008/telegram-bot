@@ -645,8 +645,8 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text("Tệp đã được thêm vào phân vùng.")
 
-# ==================== POST INIT ====================
-async def post_init(application: Application):
+# ==================== SETUP DB ====================
+async def setup_db(application: Application):
     client = AsyncIOMotorClient(
         MONGO_URI,
         maxPoolSize=10,
@@ -664,43 +664,40 @@ async def post_init(application: Application):
     application.bot_data["jobs_col"]   = db["jobs"]
     application.bot_data["warns_col"]  = db["warns"]
 
-    await start_web_server()
-    asyncio.create_task(expire_worker(application))
-
     logging.info("DB connected!")
 
 # ==================== RUN BOT ====================
-def run_bot():
+async def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler(["new_album", "new"], new_album))
+    app.add_handler(CommandHandler("done",   done))
+    app.add_handler(CommandHandler("list",   list_albums))
+    app.add_handler(CommandHandler("check",  check_album))
+    app.add_handler(CommandHandler(["del_album", "del"], delete_album))
+    app.add_handler(CommandHandler("clean",  clean_albums))
+    app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("ban",    ban_user))
+    app.add_handler(CommandHandler("unban",  unban_user))
+    app.add_handler(CommandHandler("help",   help_cmd))
+    app.add_handler(MessageHandler(
+        filters.VIDEO | filters.PHOTO, handle_media
+    ))
+
+    async with app:
+        await setup_db(app)
+        await start_web_server()
+        await app.start()
+        asyncio.create_task(expire_worker(app))
+        logging.info("Bot started!")
+        await app.updater.start_polling(drop_pending_updates=True)
+        await asyncio.Event().wait()  # chạy mãi mãi
+
+if __name__ == "__main__":
     while True:
         try:
-            app = (
-                Application.builder()
-                .token(TOKEN)
-                .post_init(post_init)
-                .build()
-            )
-
-            app.add_handler(CommandHandler("start",  start))
-            app.add_handler(CommandHandler(["new_album", "new"], new_album))
-            app.add_handler(CommandHandler("done",   done))
-            app.add_handler(CommandHandler("list",   list_albums))
-            app.add_handler(CommandHandler("check",  check_album))
-            app.add_handler(CommandHandler(["del_album", "del"], delete_album))
-            app.add_handler(CommandHandler("clean",  clean_albums))
-            app.add_handler(CommandHandler("status", status_cmd))
-            app.add_handler(CommandHandler("ban",    ban_user))
-            app.add_handler(CommandHandler("unban",  unban_user))
-            app.add_handler(CommandHandler("help",   help_cmd))
-            app.add_handler(MessageHandler(
-                filters.VIDEO | filters.PHOTO, handle_media
-            ))
-
-            logging.info("Bot started!")
-            app.run_polling(drop_pending_updates=True)
-
+            asyncio.run(main())
         except Exception as e:
             logging.error(f"Bot crashed: {e} — restarting in 10s...")
             time.sleep(10)
-
-if __name__ == "__main__":
-    run_bot()
