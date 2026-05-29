@@ -651,10 +651,12 @@ async def setup_db(application: Application):
         MONGO_URI,
         maxPoolSize=10,
         minPoolSize=0,
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=5000,
-        socketTimeoutMS=10000,
-        retryWrites=True
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=20000,
+        retryWrites=True,
+        tls=True,
+        tlsAllowInvalidCertificates=True
     )
     await client.admin.command("ping")
     db = client["botdb"]
