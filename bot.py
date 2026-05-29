@@ -2,11 +2,12 @@ import os
 import asyncio
 import logging
 import time
-import requests
 import secrets
 import string
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
+from aiohttp import web
 from telegram import Update, InputMediaPhoto, InputMediaVideo
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -20,85 +21,256 @@ logging.basicConfig(
 )
 
 # ==================== ENV VARS ====================
-TOKEN        = os.environ.get("TOKEN")
-ADMIN_ID     = int(os.environ.get("ADMIN_ID", "0"))
-MONGO_URI    = os.environ.get("MONGO_URI")
-CHANNEL_ID   = os.environ.get("CHANNEL_ID")   # ID kênh VIP (dạng -100xxxxxxxxx)
+TOKEN         = os.environ.get("TOKEN")
+ADMIN_ID      = int(os.environ.get("ADMIN_ID", "0"))
+MONGO_URI     = os.environ.get("MONGO_URI")
+CHANNEL_ID    = os.environ.get("CHANNEL_ID")
 ADMIN_CONTACT = os.environ.get("ADMIN_CONTACT", "")
-BOT_USERNAME  = os.environ.get("BOT_USERNAME", "")  # không có @
+BOT_USERNAME  = os.environ.get("BOT_USERNAME", "")
+LOG_GROUP_ID  = os.environ.get("LOG_GROUP_ID")
+PORT          = int(os.environ.get("PORT", 8080))
+DELETE_AFTER  = 10 * 60
 
-DELETE_AFTER = 10 * 60  # 10 phút (giây)
+# ==================== IN-MEMORY TRACKING ====================
+# {user_id: [timestamps]}
+request_log:      dict = defaultdict(list)
+invalid_attempts: dict = defaultdict(int)
+rate_hit_count:   dict = defaultdict(int)
+manual_start_count: dict = defaultdict(int)
+nonmember_attempts: dict = defaultdict(int)
 
-# ==================== RATE LIMIT ====================
-user_last_request = {}
-RATE_LIMIT_SECONDS = 5
-
-def is_rate_limited(user_id: int) -> bool:
-    now = time.time()
-    last = user_last_request.get(user_id, 0)
-    if now - last < RATE_LIMIT_SECONDS:
-        return True
-    user_last_request[user_id] = now
-    return False
+RATE_LIMIT_SEC        = 5
+SPAM_AUTO_BAN         = 10   # requests trong 60s
+INVALID_WARN_THRESH   = 3
+INVALID_AUTO_BAN      = 5
+RATE_WARN_THRESH      = 3
+MANUAL_WARN_THRESH    = 3
+NONMEMBER_WARN_THRESH = 3
 
 # ==================== HELPERS ====================
-def get_col(context: ContextTypes.DEFAULT_TYPE):
-    return context.application.bot_data["albums_col"]
-
-def get_banned(context: ContextTypes.DEFAULT_TYPE):
-    return context.application.bot_data["banned_col"]
+def get_col(ctx):     return ctx.application.bot_data["albums_col"]
+def get_banned(ctx):  return ctx.application.bot_data["banned_col"]
+def get_jobs(ctx):    return ctx.application.bot_data["jobs_col"]
+def get_warns(ctx):   return ctx.application.bot_data["warns_col"]
 
 def make_key() -> str:
-    chars = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(chars) for _ in range(8))
+    return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
 
 def make_link(key: str) -> str:
     return f"https://t.me/{BOT_USERNAME}?start={key}"
 
-def force_delete_webhook():
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true"
-        requests.get(url, timeout=10)
-    except Exception:
-        pass
+def now_str() -> str:
+    return datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
 
-# ==================== JOB: XÓA TIN SAU 10P ====================
-async def delete_messages(context: ContextTypes.DEFAULT_TYPE):
-    data = context.job.data
-    chat_id = data["chat_id"]
-    for msg_id in data["message_ids"]:
+# ==================== DB RETRY ====================
+async def db_retry(op, retries=3):
+    last_err = None
+    for i in range(retries):
         try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception:
-            pass
+            return await op()
+        except Exception as e:
+            last_err = e
+            logging.error(f"DB retry {i+1}/{retries}: {e}")
+            await asyncio.sleep(1)
+    raise last_err
+
+# ==================== LOG GROUP ====================
+async def send_log(app: Application, text: str):
+    if not LOG_GROUP_ID:
+        return
+    try:
+        await app.bot.send_message(
+            chat_id=LOG_GROUP_ID,
+            text=text,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Log group error: {e}")
+
+async def log_access(app, user):
+    pass  # gọi riêng trong start sau khi xác nhận
+
+async def log_ban(app, target_id, target_name, reason, ban_type="Thủ công"):
+    await send_log(app,
+        f"Ban người dùng\n"
+        f"ID: <code>{target_id}</code>\n"
+        f"Tên: {target_name}\n"
+        f"Lý do: {reason}\n"
+        f"Loại: {ban_type}\n"
+        f"Thời gian: {now_str()}"
+    )
+
+async def log_unban(app, target_id):
+    await send_log(app,
+        f"Hủy ban người dùng\n"
+        f"ID: <code>{target_id}</code>\n"
+        f"Thời gian: {now_str()}"
+    )
+
+async def log_warning(app, user, behavior: str, count: int):
+    username = f"@{user.username}" if user.username else "Không có"
+    await send_log(app,
+        f"Cảnh báo hành vi bất thường\n"
+        f"ID: <code>{user.id}</code>\n"
+        f"Tên: {user.full_name}\n"
+        f"Username: {username}\n"
+        f"Hành vi: {behavior}\n"
+        f"Số lần: {count}\n"
+        f"Thời gian: {now_str()}"
+    )
+
+async def log_auto_ban(app, user, reason: str):
+    username = f"@{user.username}" if user.username else "Không có"
+    await send_log(app,
+        f"Tự động ban\n"
+        f"ID: <code>{user.id}</code>\n"
+        f"Tên: {user.full_name}\n"
+        f"Username: {username}\n"
+        f"Lý do: {reason}\n"
+        f"Thời gian: {now_str()}"
+    )
+
+async def log_view(app, user, key: str):
+    username = f"@{user.username}" if user.username else "Không có"
+    await send_log(app,
+        f"Truy cập nội dung\n"
+        f"ID: <code>{user.id}</code>\n"
+        f"Tên: {user.full_name}\n"
+        f"Username: {username}\n"
+        f"Tệp truy cập: <code>{key}</code>\n"
+        f"Thời gian: {now_str()}"
+    )
+
+# ==================== AUTO BAN HELPER ====================
+async def do_auto_ban(app: Application, user, reason: str):
+    banned_col = app.bot_data["banned_col"]
+    warns_col  = app.bot_data["warns_col"]
+    await banned_col.update_one(
+        {"user_id": user.id},
+        {"$set": {
+            "user_id":   user.id,
+            "name":      user.full_name,
+            "reason":    reason,
+            "ban_type":  "Tự động",
+            "banned_at": datetime.now(timezone.utc)
+        }},
+        upsert=True
+    )
+    await warns_col.delete_many({"user_id": user.id})
+    await log_auto_ban(app, user, reason)
+
+# ==================== RATE + SPAM CHECK ====================
+async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Trả về True nếu user bị chặn (đã xử lý), False nếu cho qua.
+    """
+    user    = update.effective_user
+    user_id = user.id
+    app     = context.application
+    now     = time.time()
+
+    # Chặn bot account
+    if user.is_bot:
+        await do_auto_ban(app, user, "Phát hiện tài khoản bot")
+        return True
+
+    # Spam detection: > SPAM_AUTO_BAN requests trong 60s
+    request_log[user_id] = [t for t in request_log[user_id] if now - t < 60]
+    request_log[user_id].append(now)
+    if len(request_log[user_id]) > SPAM_AUTO_BAN:
+        await do_auto_ban(app, user, "Lạm dụng hệ thống")
+        await update.message.reply_text(
+            "Quyền truy cập của bạn đã bị thu hồi tự động.\n"
+            f"Nếu cho rằng đây là nhầm lẫn, vui lòng liên hệ: {ADMIN_CONTACT}",
+            protect_content=True
+        )
+        return True
+
+    # Rate limit: < RATE_LIMIT_SEC giữa các request
+    last_req = request_log[user_id][-2] if len(request_log[user_id]) >= 2 else 0
+    if now - last_req < RATE_LIMIT_SEC:
+        rate_hit_count[user_id] += 1
+        if rate_hit_count[user_id] >= RATE_WARN_THRESH:
+            await log_warning(app, user, "Bị rate limit nhiều lần", rate_hit_count[user_id])
+            rate_hit_count[user_id] = 0
+        return True
+
+    return False
+
+# ==================== AIOHTTP KEEP-ALIVE ====================
+async def health_handler(request):
+    return web.Response(text="ok")
+
+async def start_web_server():
+    webapp = web.Application()
+    webapp.router.add_get("/", health_handler)
+    runner = web.AppRunner(webapp)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logging.info(f"Web server running on port {PORT}")
+
+# ==================== EXPIRE WORKER ====================
+async def expire_worker(application: Application):
+    jobs_col = application.bot_data["jobs_col"]
+    while True:
+        try:
+            now    = datetime.now(timezone.utc)
+            cursor = jobs_col.find({"expire_at": {"$lte": now}, "done": False})
+            async for job in cursor:
+                for msg_id in job.get("message_ids", []):
+                    try:
+                        await application.bot.delete_message(
+                            chat_id=job["chat_id"],
+                            message_id=msg_id
+                        )
+                    except Exception:
+                        pass
+                await jobs_col.update_one(
+                    {"_id": job["_id"]},
+                    {"$set": {"done": True}}
+                )
+        except Exception as e:
+            logging.error(f"Expire worker error: {e}")
+        await asyncio.sleep(60)
 
 # ==================== USER: /start ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user    = update.effective_user
     user_id = user.id
+    app     = context.application
 
-    # Rate limit
-    if is_rate_limited(user_id):
-        return
-
-    # Kiểm tra bị ban
+    # Check ban
     banned_col = get_banned(context)
-    if await banned_col.find_one({"user_id": user_id}):
+    try:
+        is_banned = await db_retry(lambda: banned_col.find_one({"user_id": user_id}))
+    except Exception:
+        is_banned = False
+
+    if is_banned:
         await update.message.reply_text(
-            "🚫 Bạn đã bị chặn khỏi hệ thống.",
+            "Quyền truy cập của bạn đã bị thu hồi.\n"
+            f"Nếu cho rằng đây là nhầm lẫn, vui lòng liên hệ: {ADMIN_CONTACT}",
             protect_content=True
         )
         return
 
+    # Spam + rate check
+    if await check_user(update, context):
+        return
+
     args = context.args
 
-    # Không có key → hướng dẫn mua VIP
+    # Không có args → người lạ hoặc gõ thủ công
     if not args:
+        manual_start_count[user_id] += 1
+        if manual_start_count[user_id] >= MANUAL_WARN_THRESH:
+            await log_warning(app, user, "Gõ /start thủ công nhiều lần", manual_start_count[user_id])
+            manual_start_count[user_id] = 0
         await update.message.reply_text(
-            "👑 <b>Kênh VIP độc quyền</b>\n\n"
-            "Nội dung chỉ dành cho thành viên đã đăng ký.\n\n"
-            f"💎 Liên hệ admin để mua quyền truy cập:\n<b>{ADMIN_CONTACT}</b>",
-            parse_mode="HTML",
+            "Hệ thống nội dung độc quyền.\n\n"
+            "Bạn hiện chưa có quyền truy cập.\n"
+            f"Vui lòng liên hệ quản trị viên: {ADMIN_CONTACT}",
             protect_content=True
         )
         return
@@ -106,58 +278,62 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key        = args[0]
     albums_col = get_col(context)
 
-    # Lấy album từ DB
     try:
-        album = await albums_col.find_one({"key": key})
+        album = await db_retry(lambda: albums_col.find_one({"key": key}))
     except Exception:
         await update.message.reply_text(
-            "⚡ <b>Hệ thống đang bận</b>\n\nVui lòng thử lại sau ít phút.",
-            parse_mode="HTML",
+            "Hệ thống đang xử lý dữ liệu ngầm. Vui lòng thử lại sau vài phút.",
             protect_content=True
         )
         return
 
     if not album:
+        invalid_attempts[user_id] += 1
+        count = invalid_attempts[user_id]
+        if count >= INVALID_WARN_THRESH:
+            await log_warning(app, user, "Bấm link không hợp lệ nhiều lần", count)
+        if count >= INVALID_AUTO_BAN:
+            await do_auto_ban(app, user, "Cố tình dò link")
+            await update.message.reply_text(
+                "Quyền truy cập của bạn đã bị thu hồi tự động.\n"
+                f"Nếu cho rằng đây là nhầm lẫn, vui lòng liên hệ: {ADMIN_CONTACT}",
+                protect_content=True
+            )
+            return
         await update.message.reply_text(
-            "🔱 <b>Không tìm thấy nội dung</b>\n\n"
-            "Link này đã hết hạn hoặc không tồn tại.\n\n"
-            "↩️ Vào kênh VIP và bấm lại link để xem nhé!",
-            parse_mode="HTML",
+            "Dữ liệu không tồn tại hoặc phiên chia sẻ đã hết hạn.",
             protect_content=True
         )
         return
 
-    # Kiểm tra member kênh VIP
+    # Reset invalid counter khi link hợp lệ
+    invalid_attempts[user_id] = 0
+
+    # Check member kênh VIP
     try:
         member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
         if member.status in ("left", "kicked"):
+            nonmember_attempts[user_id] += 1
+            count = nonmember_attempts[user_id]
+            if count >= NONMEMBER_WARN_THRESH:
+                await log_warning(app, user, "Truy cập trái phép nhiều lần", count)
+                nonmember_attempts[user_id] = 0
             await update.message.reply_text(
-                "🔐 <b>Bạn chưa có quyền truy cập</b>\n\n"
-                "Nội dung chỉ dành cho thành viên kênh VIP.\n\n"
-                f"💎 Liên hệ admin để đăng ký:\n<b>{ADMIN_CONTACT}</b>",
-                parse_mode="HTML",
+                "Xác thực không thành công.\n\n"
+                "Nội dung được bảo mật và chỉ hiển thị với thành viên kênh nội bộ.\n"
+                f"Đăng ký quyền truy cập: {ADMIN_CONTACT}",
                 protect_content=True
             )
             return
     except Exception:
-        pass  # Nếu không check được thì cho qua
-
-    # Thông báo admin có user xem nội dung
-    try:
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                f"👁 User xem nội dung\n\n"
-                f"• ID: <code>{user_id}</code>\n"
-                f"• Tên: {user.full_name}\n"
-                f"• Album: <code>{key}</code>"
-            ),
-            parse_mode="HTML"
-        )
-    except Exception:
         pass
 
-    # Gửi nội dung (protect_content=True cho tất cả)
+    nonmember_attempts[user_id] = 0
+
+    # Log truy cập vào nhóm
+    await log_view(app, user, key)
+
+    # Gửi nội dung
     items        = album.get("items", [])
     sent_msg_ids = []
 
@@ -165,18 +341,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item = items[0]
         if item["type"] == "video":
             msg = await context.bot.send_video(
-                chat_id=user_id,
-                video=item["file_id"],
-                protect_content=True
+                chat_id=user_id, video=item["file_id"], protect_content=True
             )
         else:
             msg = await context.bot.send_photo(
-                chat_id=user_id,
-                photo=item["file_id"],
-                protect_content=True
+                chat_id=user_id, photo=item["file_id"], protect_content=True
             )
         sent_msg_ids.append(msg.message_id)
-
     else:
         media = []
         for item in items:
@@ -184,31 +355,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 media.append(InputMediaVideo(media=item["file_id"]))
             else:
                 media.append(InputMediaPhoto(media=item["file_id"]))
-
         msgs = await context.bot.send_media_group(
-            chat_id=user_id,
-            media=media,
-            protect_content=True
+            chat_id=user_id, media=media, protect_content=True
         )
         sent_msg_ids = [m.message_id for m in msgs]
 
-    # Thông báo 10 phút tự xóa
-    notice = await update.message.reply_text(
-        "✨ <b>Đây là nội dung của bạn!</b>\n\n"
-        "⏳ Nội dung sẽ tự xóa sau <b>10 phút</b>.\n"
-        "Muốn xem lại, vào kênh VIP bấm lại link nhé 👑",
-        parse_mode="HTML",
-        protect_content=True
-    )
-    sent_msg_ids.append(notice.message_id)
-
-    # Đặt job xóa sau 10 phút
-    context.application.job_queue.run_once(
-        delete_messages,
-        DELETE_AFTER,
-        data={"chat_id": user_id, "message_ids": sent_msg_ids},
-        name=f"del_{user_id}_{key}"
-    )
+    # Lưu job xóa vào MongoDB
+    jobs_col = get_jobs(context)
+    await jobs_col.insert_one({
+        "chat_id":     user_id,
+        "message_ids": sent_msg_ids,
+        "expire_at":   datetime.now(timezone.utc) + timedelta(seconds=DELETE_AFTER),
+        "done":        False
+    })
 
 # ==================== ADMIN: /new ====================
 async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -217,9 +376,8 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("current_key"):
         await update.message.reply_text(
-            "🔱 <b>Đang có album chưa hoàn thành!</b>\n\n"
-            "Gõ /done để lấy link album hiện tại trước nhé.",
-            parse_mode="HTML"
+            "Cảnh báo: Một tiến trình đóng gói đang diễn ra.\n"
+            "Vui lòng nhập /done để kết thúc tác vụ hiện tại."
         )
         return
 
@@ -228,14 +386,14 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await albums_col.insert_one({
         "key":        key,
         "items":      [],
-        "created_at": datetime.utcnow()
+        "created_at": datetime.now(timezone.utc)
     })
     context.user_data["current_key"] = key
 
     await update.message.reply_text(
-        "💎 <b>Album mới đã sẵn sàng!</b>\n\n"
-        f"Key: <code>{key}</code>\n\n"
-        "Forward video/ảnh vào đây, gõ /done khi xong.",
+        f"Khởi tạo lưu trữ mới.\n"
+        f"ID: <code>{key}</code>\n\n"
+        f"Vui lòng forward tệp tin vào đây. Nhập /done khi hoàn tất.",
         parse_mode="HTML"
     )
 
@@ -246,14 +404,13 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     key = context.user_data.get("current_key")
     if not key:
-        await update.message.reply_text("Chưa có album nào đang upload.")
+        await update.message.reply_text("Không có tiến trình nào đang diễn ra.")
         return
 
     context.user_data.pop("current_key", None)
-
     await update.message.reply_text(
-        "👑 <b>Hoàn tất!</b>\n\n"
-        f"🔗 Link chia sẻ:\n<code>{make_link(key)}</code>",
+        f"Đóng gói hoàn tất.\n"
+        f"Liên kết truy cập:\n<code>{make_link(key)}</code>",
         parse_mode="HTML"
     )
 
@@ -264,21 +421,20 @@ async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     albums_col = get_col(context)
     try:
-        albums = await albums_col.find(
-            {}, {"key": 1, "items": 1}
-        ).to_list(length=50)
+        albums = await db_retry(
+            lambda: albums_col.find({}, {"key": 1, "items": 1}).to_list(length=50)
+        )
     except Exception:
-        await update.message.reply_text("❌ Lỗi DB!")
+        await update.message.reply_text("Cảnh báo: Mất kết nối cơ sở dữ liệu.")
         return
 
     if not albums:
-        await update.message.reply_text("💎 Chưa có album nào.")
+        await update.message.reply_text("Không có tệp dữ liệu nào trong hệ thống.")
         return
 
-    text = "👑 <b>Danh sách album</b>\n\n"
+    text = "Danh sách lưu trữ:\n\n"
     for a in albums:
-        text += f"• <code>{a['key']}</code> — {len(a.get('items', []))} file\n"
-
+        text += f"<code>{a['key']}</code> — {len(a.get('items', []))} tệp\n"
     await update.message.reply_text(text, parse_mode="HTML")
 
 # ==================== ADMIN: /check ====================
@@ -287,17 +443,16 @@ async def check_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Dùng: /check &lt;key&gt;", parse_mode="HTML")
+        await update.message.reply_text("Cú pháp: /check &lt;ID&gt;", parse_mode="HTML")
         return
 
     key        = context.args[0]
     albums_col = get_col(context)
-    album      = await albums_col.find_one({"key": key})
+    album      = await db_retry(lambda: albums_col.find_one({"key": key}))
 
     if not album:
         await update.message.reply_text(
-            f"💎 Không tìm thấy album <code>{key}</code>",
-            parse_mode="HTML"
+            f"Không tìm thấy ID: <code>{key}</code>", parse_mode="HTML"
         )
         return
 
@@ -306,11 +461,10 @@ async def check_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photos = sum(1 for i in items if i["type"] == "photo")
 
     await update.message.reply_text(
-        f"👑 <b>Album:</b> <code>{key}</code>\n\n"
-        f"💎 Tổng: <b>{len(items)}</b> file\n"
-        f"🎬 Video: <b>{videos}</b>\n"
-        f"🖼 Ảnh: <b>{photos}</b>\n\n"
-        f"🔗 <code>{make_link(key)}</code>",
+        f"Chi tiết: <code>{key}</code>\n"
+        f"Tổng số tệp: {len(items)}\n"
+        f"Video: {videos} | Ảnh: {photos}\n"
+        f"Liên kết: <code>{make_link(key)}</code>",
         parse_mode="HTML"
     )
 
@@ -320,7 +474,7 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Dùng: /del &lt;key&gt;", parse_mode="HTML")
+        await update.message.reply_text("Cú pháp: /del &lt;ID&gt;", parse_mode="HTML")
         return
 
     key        = context.args[0]
@@ -329,13 +483,11 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if result.deleted_count == 0:
         await update.message.reply_text(
-            f"💎 Không tìm thấy album <code>{key}</code>",
-            parse_mode="HTML"
+            f"Không tìm thấy ID: <code>{key}</code>", parse_mode="HTML"
         )
     else:
         await update.message.reply_text(
-            f"✨ Đã xóa album <code>{key}</code>",
-            parse_mode="HTML"
+            f"Đã hủy vĩnh viễn tệp dữ liệu <code>{key}</code>.", parse_mode="HTML"
         )
 
 # ==================== ADMIN: /clean ====================
@@ -344,39 +496,13 @@ async def clean_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     albums_col = get_col(context)
-    cutoff     = datetime.utcnow() - timedelta(days=7)
-
-    result = await albums_col.delete_many({
-        "$or": [
-            {"items": []},
-            {"created_at": {"$lt": cutoff}}
-        ]
+    cutoff     = datetime.now(timezone.utc) - timedelta(days=7)
+    result     = await albums_col.delete_many({
+        "$or": [{"items": []}, {"created_at": {"$lt": cutoff}}]
     })
-
     await update.message.reply_text(
-        f"✨ Đã dọn <b>{result.deleted_count}</b> album cũ.",
-        parse_mode="HTML"
+        f"Đã dọn dẹp bộ nhớ: {result.deleted_count} tệp dữ liệu rỗng/quá hạn."
     )
-
-# ==================== ADMIN: /status ====================
-async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    albums_col = get_col(context)
-    try:
-        total = await albums_col.count_documents({})
-        await update.message.reply_text(
-            "✨ <b>Hệ thống hoạt động bình thường</b>\n\n"
-            f"👑 Tổng album: <b>{total}</b>\n"
-            "⚡ DB: Connected",
-            parse_mode="HTML"
-        )
-    except Exception:
-        await update.message.reply_text(
-            "⚡ <b>Lỗi kết nối DB!</b>",
-            parse_mode="HTML"
-        )
 
 # ==================== ADMIN: /ban ====================
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -384,25 +510,52 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Dùng: /ban &lt;user_id&gt;", parse_mode="HTML")
+        await update.message.reply_text(
+            "Cú pháp: /ban &lt;ID&gt; &lt;lý do&gt;\n\n"
+            "Lý do gợi ý:\n"
+            "share — Chia sẻ nội dung ra ngoài\n"
+            "spam — Spam hệ thống\n"
+            "fake — Tài khoản giả mạo\n"
+            "expired — Hết hạn đăng ký\n"
+            "other — Lý do khác",
+            parse_mode="HTML"
+        )
         return
 
     try:
         target_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("User ID phải là số.")
+        await update.message.reply_text("ID không hợp lệ.")
         return
 
+    reason     = " ".join(context.args[1:]) if len(context.args) > 1 else "Không rõ lý do"
     banned_col = get_banned(context)
+
+    # Lấy tên user nếu có thể
+    try:
+        chat = await context.bot.get_chat(target_id)
+        name = chat.full_name
+    except Exception:
+        name = "Không rõ"
+
     await banned_col.update_one(
         {"user_id": target_id},
-        {"$set": {"user_id": target_id, "banned_at": datetime.utcnow()}},
+        {"$set": {
+            "user_id":   target_id,
+            "name":      name,
+            "reason":    reason,
+            "ban_type":  "Thủ công",
+            "banned_at": datetime.now(timezone.utc)
+        }},
         upsert=True
     )
+
     await update.message.reply_text(
-        f"✅ Đã ban user <code>{target_id}</code>",
+        f"Đã đưa ID <code>{target_id}</code> vào danh sách đen.\n"
+        f"Lý do: {reason}",
         parse_mode="HTML"
     )
+    await log_ban(context.application, target_id, name, reason)
 
 # ==================== ADMIN: /unban ====================
 async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -410,13 +563,13 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Dùng: /unban &lt;user_id&gt;", parse_mode="HTML")
+        await update.message.reply_text("Cú pháp: /unban &lt;ID&gt;", parse_mode="HTML")
         return
 
     try:
         target_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("User ID phải là số.")
+        await update.message.reply_text("ID không hợp lệ.")
         return
 
     banned_col = get_banned(context)
@@ -424,11 +577,30 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if result.deleted_count:
         await update.message.reply_text(
-            f"✅ Đã unban user <code>{target_id}</code>",
-            parse_mode="HTML"
+            f"Đã khôi phục quyền cho ID <code>{target_id}</code>.", parse_mode="HTML"
         )
+        await log_unban(context.application, target_id)
     else:
-        await update.message.reply_text("Không tìm thấy user này trong danh sách ban.")
+        await update.message.reply_text("Không tìm thấy ID trong danh sách đen.")
+
+# ==================== ADMIN: /status ====================
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    albums_col = get_col(context)
+    banned_col = get_banned(context)
+    try:
+        total_albums = await albums_col.count_documents({})
+        total_banned = await banned_col.count_documents({})
+        await update.message.reply_text(
+            f"Trạng thái hệ thống:\n\n"
+            f"Phân vùng dữ liệu: {total_albums} tệp\n"
+            f"Danh sách đen: {total_banned} tài khoản\n"
+            f"Cơ sở dữ liệu: Kết nối ổn định"
+        )
+    except Exception:
+        await update.message.reply_text("Cảnh báo: Mất kết nối cơ sở dữ liệu.")
 
 # ==================== ADMIN: /help ====================
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -436,23 +608,16 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "👑 <b>Hướng dẫn Admin</b>\n\n"
-        "1. /new — Tạo album mới\n"
-        "   Sau khi gõ → forward ảnh/video vào bot\n"
-        "   Xong thì gõ /done để lấy link\n\n"
-        "2. /done — Kết thúc upload, bot trả về deep link\n"
-        "   Dán link vào bài đăng kênh VIP\n\n"
-        "3. /list — Xem toàn bộ album đang có\n"
-        "   Hiển thị key + số file mỗi album\n\n"
-        "4. /check &lt;key&gt; — Xem chi tiết 1 album\n"
-        "   VD: /check abc123\n\n"
-        "5. /del &lt;key&gt; — Xóa album\n"
-        "   VD: /del abc123\n"
-        "   ⚠️ Không khôi phục được!\n\n"
-        "6. /clean — Xóa album trống + cũ hơn 7 ngày\n\n"
-        "7. /ban &lt;user_id&gt; — Chặn user\n"
-        "8. /unban &lt;user_id&gt; — Bỏ chặn user\n\n"
-        "9. /status — Kiểm tra bot + DB",
+        "Hướng dẫn vận hành:\n\n"
+        "/new — Khởi tạo phân vùng dữ liệu mới\n"
+        "/done — Đóng gói và xuất liên kết truy cập\n"
+        "/list — Liệt kê toàn bộ dữ liệu\n"
+        "/check &lt;ID&gt; — Xem chi tiết một phân vùng\n"
+        "/del &lt;ID&gt; — Xóa vĩnh viễn dữ liệu\n"
+        "/clean — Dọn dẹp dữ liệu quá hạn hoặc rỗng\n"
+        "/ban &lt;ID&gt; &lt;lý do&gt; — Chặn người dùng\n"
+        "/unban &lt;ID&gt; — Hủy chặn người dùng\n"
+        "/status — Kiểm tra tình trạng máy chủ",
         parse_mode="HTML"
     )
 
@@ -468,11 +633,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     albums_col = get_col(context)
 
     if update.message.video:
-        file_id   = update.message.video.file_id
-        file_type = "video"
+        file_id, file_type = update.message.video.file_id, "video"
     elif update.message.photo:
-        file_id   = update.message.photo[-1].file_id
-        file_type = "photo"
+        file_id, file_type = update.message.photo[-1].file_id, "photo"
     else:
         return
 
@@ -480,25 +643,36 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         {"key": key},
         {"$push": {"items": {"type": file_type, "file_id": file_id}}}
     )
-    await update.message.reply_text("✅ Đã thêm file vào album.")
+    await update.message.reply_text("Tệp đã được thêm vào phân vùng.")
 
-# ==================== RUN BOT ====================
+# ==================== POST INIT ====================
 async def post_init(application: Application):
-    """Khởi tạo DB trong đúng event loop của bot."""
     client = AsyncIOMotorClient(
         MONGO_URI,
-        serverSelectionTimeoutMS=5000
+        maxPoolSize=10,
+        minPoolSize=0,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=5000,
+        socketTimeoutMS=10000,
+        retryWrites=True
     )
+    await client.admin.command("ping")
     db = client["botdb"]
+
     application.bot_data["albums_col"] = db["albums"]
     application.bot_data["banned_col"] = db["banned"]
-    logging.info("✅ DB connected!")
+    application.bot_data["jobs_col"]   = db["jobs"]
+    application.bot_data["warns_col"]  = db["warns"]
 
+    await start_web_server()
+    asyncio.create_task(expire_worker(application))
+
+    logging.info("DB connected!")
+
+# ==================== RUN BOT ====================
 def run_bot():
     while True:
         try:
-            force_delete_webhook()
-
             app = (
                 Application.builder()
                 .token(TOKEN)
@@ -506,10 +680,7 @@ def run_bot():
                 .build()
             )
 
-            # User
-            app.add_handler(CommandHandler("start", start))
-
-            # Admin
+            app.add_handler(CommandHandler("start",  start))
             app.add_handler(CommandHandler(["new_album", "new"], new_album))
             app.add_handler(CommandHandler("done",   done))
             app.add_handler(CommandHandler("list",   list_albums))
@@ -524,8 +695,8 @@ def run_bot():
                 filters.VIDEO | filters.PHOTO, handle_media
             ))
 
-            logging.info("✅ Bot started!")
-            app.run_polling(drop_pending_updates=True)  # Tự quản lý event loop
+            logging.info("Bot started!")
+            app.run_polling(drop_pending_updates=True)
 
         except Exception as e:
             logging.error(f"Bot crashed: {e} — restarting in 10s...")
