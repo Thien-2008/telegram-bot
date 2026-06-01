@@ -78,6 +78,7 @@ LY_DO_GỢI_Ý = {
 
 # ==================== PARSE THỜI HẠN BAN ====================
 def parse_duration(text: str):
+    """Trả về timedelta hoặc None nếu là ban vĩnh viễn."""
     match = re.match(r'^(\d+)(g|ng)$', text.lower())
     if not match:
         return None
@@ -104,7 +105,8 @@ def now_str() -> str:
     return datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
 
 def sanitize_log(text: str, max_len: int = 500) -> str:
-    text = str(text).replace("<", "&lt;").replace(">", "&gt;")
+    """Cắt ngắn và làm sạch text trước khi gửi log."""
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
     if len(text) > max_len:
         text = text[:max_len] + "..."
     return text
@@ -115,6 +117,7 @@ async def user_reply(update: Update, text: str, **kwargs):
     )
 
 async def auto_delete_msg(bot, chat_id: int, message_id: int, delay: int):
+    """Tự động xóa tin nhắn sau delay giây."""
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -123,6 +126,7 @@ async def auto_delete_msg(bot, chat_id: int, message_id: int, delay: int):
 
 async def user_reply_temp(update: Update, context, text: str,
                            delay: int = 120, **kwargs):
+    """Gửi tin nhắn rồi tự xóa sau delay giây."""
     msg = await update.message.reply_text(
         text, protect_content=True, **kwargs
     )
@@ -147,6 +151,9 @@ async def db_retry(op, retries=3):
     raise last_err
 
 # ==================== LOG ====================
+_log_buffer:    list = []
+_log_lock = asyncio.Lock() if False else None  # khởi tạo sau
+
 async def send_log(app: Application, text: str, reply_markup=None):
     if not LOG_GROUP_ID:
         return
@@ -226,6 +233,7 @@ async def do_ban(app: Application, target_id: int, name: str,
     expire_at  = None
     if duration:
         expire_at = datetime.now(timezone.utc) + duration
+
     await banned_col.update_one(
         {"user_id": target_id},
         {"$set": {
@@ -241,12 +249,18 @@ async def do_ban(app: Application, target_id: int, name: str,
     await log_ban(app, target_id, name, reason, ban_type,
                   show_unban_btn=(ban_type == "Tự động"))
 
+async def do_unban(app: Application, target_id: int):
+    banned_col = app.bot_data["banned_col"]
+    await banned_col.delete_one({"user_id": target_id})
+    await log_unban(app, target_id)
+
 # ==================== CALLBACK: NÚT GỠ BAN ====================
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if update.effective_user.id != ADMIN_ID:
         await query.answer("Bạn không có quyền!")
         return
+
     data = query.data
     if data.startswith("unban_"):
         target_id  = int(data.split("_")[1])
@@ -266,7 +280,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             await query.answer("Đã gỡ ban!")
             await query.edit_message_text(
-                query.message.text + f"\n\nĐã gỡ ban lúc {now_str()}"
+                query.message.text + f"\n\n✅ Đã gỡ ban lúc {now_str()}"
             )
             await log_unban(context.application, target_id)
         else:
@@ -279,7 +293,7 @@ async def is_vip_member(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> boo
         return member.status not in ("left", "kicked")
     except Exception as e:
         logging.error(f"Check VIP error: {e}")
-        return False
+        return False  # Lỗi → từ chối, không cho qua
 
 # ==================== SPAM + RATE CHECK ====================
 async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -288,25 +302,26 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool
     app     = context.application
     now     = time.time()
 
+    # Chặn bot account
     if user.is_bot:
         await do_ban(app, user_id, user.full_name, "Phát hiện tài khoản bot")
         return True
 
+    # Phát hiện tài khoản đáng ngờ
     if not user.username:
         await log_suspicious(app, user, "Không có username")
     if not user.last_name and len(user.first_name) < 2:
         await log_suspicious(app, user, "Tên quá ngắn, có thể là bot")
 
+    # Spam detection
     request_log[user_id] = [t for t in request_log[user_id] if now - t < 60]
     request_log[user_id].append(now)
     count = len(request_log[user_id])
 
     if count >= SPAM_PERM_BAN:
-        await do_ban(app, user_id, user.full_name,
-                     "Spam 60 lần trong 1 phút — tấn công hệ thống")
+        await do_ban(app, user_id, user.full_name, "Lạm dụng hệ thống nghiêm trọng")
         await user_reply_temp(update, context,
             "Quyền truy cập của bạn đã bị thu hồi vĩnh viễn.\n"
-            f"Lý do: Spam 60 lần trong 1 phút.\n"
             f"Nếu cho rằng đây là nhầm lẫn, vui lòng liên hệ: {ADMIN_CONTACT}",
             delay=300
         )
@@ -330,6 +345,7 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool
     if count >= SPAM_WARN_THRESH:
         await log_warning(app, user, "Spam request nhiều lần", count)
 
+    # Rate limit
     prev = request_log[user_id][-2] if len(request_log[user_id]) >= 2 else 0
     if now - prev < RATE_LIMIT_SEC:
         rate_hit_count[user_id] += 1
@@ -339,7 +355,8 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool
         return True
 
     return False
-    # ==================== KEEP-ALIVE ====================
+
+# ==================== KEEP-ALIVE ====================
 async def health_handler(request):
     return web.Response(text="ok")
 
@@ -363,6 +380,7 @@ async def start_web_server(mongo_client):
 
 # ==================== EXPIRE WORKER ====================
 async def expire_worker(application: Application):
+    """Xóa message hết hạn sau 10 phút."""
     jobs_col = application.bot_data["jobs_col"]
     while True:
         try:
@@ -375,7 +393,7 @@ async def expire_worker(application: Application):
                             chat_id=job["chat_id"], message_id=msg_id
                         )
                     except (Forbidden, BadRequest):
-                        pass
+                        pass  # User block bot hoặc message đã xóa → bỏ qua
                     except Exception as e:
                         logging.error(f"Delete msg error: {e}")
                 await jobs_col.update_one(
@@ -387,6 +405,7 @@ async def expire_worker(application: Application):
 
 # ==================== UNBAN WORKER ====================
 async def unban_worker(application: Application):
+    """Tự động gỡ ban hết hạn."""
     banned_col = application.bot_data["banned_col"]
     while True:
         try:
@@ -428,21 +447,13 @@ async def send_with_retry(coro_func, retries=3, delay=2):
                 raise
     raise Exception("Gửi media thất bại sau nhiều lần thử")
 
-# ==================== HANDLER LỆNH KHÔNG CÓ QUYỀN ====================
-async def no_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id == ADMIN_ID:
-        return
-    await user_reply_temp(update, context,
-        "Bạn không có quyền sử dụng lệnh này.",
-        delay=120
-    )
-
 # ==================== USER: /start ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user    = update.effective_user
     user_id = user.id
     app     = context.application
 
+    # Kiểm tra ban
     banned_col = get_banned(context)
     try:
         ban_doc = await db_retry(lambda: banned_col.find_one({"user_id": user_id}))
@@ -454,19 +465,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         expire_at = ban_doc.get("expire_at")
         if expire_at:
             expire_str = expire_at.strftime("%d/%m/%Y %H:%M")
-            await user_reply_temp(update, context,
+            await user_reply(update,
                 f"Tài khoản của bạn đang bị tạm khóa.\n"
                 f"Lý do: {reason}\n"
                 f"Hết hạn lúc: {expire_str}\n"
-                f"Liên hệ admin: {ADMIN_CONTACT}",
-                delay=300
+                f"Liên hệ admin: {ADMIN_CONTACT}"
             )
         else:
-            await user_reply_temp(update, context,
+            await user_reply(update,
                 f"Quyền truy cập của bạn đã bị thu hồi.\n"
                 f"Lý do: {reason}\n"
-                f"Nếu cho rằng đây là nhầm lẫn, vui lòng liên hệ: {ADMIN_CONTACT}",
-                delay=300
+                f"Nếu cho rằng đây là nhầm lẫn, vui lòng liên hệ: {ADMIN_CONTACT}"
             )
         return
 
@@ -475,6 +484,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args
 
+    # Không có args
     if not args:
         manual_start_count[user_id] += 1
         if manual_start_count[user_id] >= MANUAL_WARN_THRESH:
@@ -586,13 +596,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             media = []
             for item in batch:
                 if item["type"] == "video":
-                    media.append(InputMediaVideo(
-                        media=item["file_id"], has_spoiler=True
-                    ))
+                    media.append(InputMediaVideo(media=item["file_id"], has_spoiler=True))
                 else:
-                    media.append(InputMediaPhoto(
-                        media=item["file_id"], has_spoiler=True
-                    ))
+                    media.append(InputMediaPhoto(media=item["file_id"], has_spoiler=True))
             try:
                 msgs = await send_with_retry(lambda: context.bot.send_media_group(
                     chat_id=user_id, media=media, protect_content=True
@@ -615,9 +621,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "expire_at":   datetime.now(timezone.utc) + timedelta(seconds=DELETE_AFTER),
             "done":        False
         })
-        # ==================== ADMIN: /new ====================
+
+# ==================== HANDLER LỆNH KHÔNG CÓ QUYỀN ====================
+async def no_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id == ADMIN_ID:
+        return
+    await user_reply_temp(update, context,
+        "Bạn không có quyền sử dụng lệnh này.",
+        delay=120
+    )
+
+# ==================== ADMIN: /new ====================
 async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     if context.user_data.get("current_key"):
@@ -647,10 +667,15 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: NHẬN MEDIA ====================
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
+    # Forward tin nhắn → trả về ID
     if update.message.forward_from:
-        fwd   = update.message.forward_from
+        fwd = update.message.forward_from
         uname = f"@{fwd.username}" if fwd.username else "Không có"
         await update.message.reply_text(
             f"Thông tin tài khoản:\n"
@@ -690,6 +715,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /done ====================
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     key = context.user_data.get("current_key")
@@ -718,6 +747,10 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /list ====================
 async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     albums_col = get_albums(context)
@@ -744,6 +777,10 @@ async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /detail ====================
 async def detail_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     albums_col = get_albums(context)
@@ -773,6 +810,10 @@ async def detail_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /check ====================
 async def check_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     if not context.args:
@@ -814,6 +855,10 @@ async def check_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /del ====================
 async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     if not context.args:
@@ -826,6 +871,7 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         result = await albums_col.delete_one({"key": key})
+        # Cascade xóa job liên quan
         await jobs_col.delete_many({"album_key": key})
     except Exception:
         await update.message.reply_text("Lỗi kết nối cơ sở dữ liệu.")
@@ -839,6 +885,10 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /clean ====================
 async def clean_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     albums_col = get_albums(context)
@@ -861,8 +911,10 @@ async def clean_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _do_ban_member(update: Update, context: ContextTypes.DEFAULT_TYPE,
                           target_id: int, target_name: str,
                           reason: str, duration: timedelta = None):
+    """Ban khỏi nhóm + ban khỏi bot + thông báo + log."""
     app = context.application
 
+    # Kick khỏi nhóm nếu lệnh từ nhóm
     if update.effective_chat.type in ("group", "supergroup"):
         try:
             await context.bot.ban_chat_member(
@@ -873,13 +925,15 @@ async def _do_ban_member(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await update.message.reply_text(f"Không thể kick khỏi nhóm: {e}")
             return
 
+    # Ban khỏi bot
     await do_ban(app, target_id, target_name, reason,
                  ban_type="Thủ công", duration=duration)
 
+    # Thông báo cho user bị ban
     try:
         expire_text = ""
         if duration:
-            expire_at   = datetime.now(timezone(timedelta(hours=7))) + duration
+            expire_at  = datetime.now(timezone(timedelta(hours=7))) + duration
             expire_text = f"\nHết hạn lúc: {expire_at.strftime('%d/%m/%Y %H:%M')}"
         await context.bot.send_message(
             chat_id=target_id,
@@ -893,6 +947,7 @@ async def _do_ban_member(update: Update, context: ContextTypes.DEFAULT_TYPE,
     except Exception:
         pass
 
+    # Thông báo trong nhóm/chat
     expire_info = ""
     if duration:
         hours = int(duration.total_seconds() // 3600)
@@ -909,6 +964,10 @@ async def _do_ban_member(update: Update, context: ContextTypes.DEFAULT_TYPE,
 # ==================== ADMIN: /ban ====================
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     target_id   = None
@@ -917,10 +976,12 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reason      = "Vi phạm quy định"
     args        = context.args or []
 
+    # Cách 1: Reply tin nhắn
     if update.message.reply_to_message:
         target_user = update.message.reply_to_message.from_user
         target_id   = target_user.id
         target_name = target_user.full_name
+        # Parse args: [thời_hạn?] [lý_do...]
         if args:
             dur = parse_duration(args[0])
             if dur:
@@ -930,6 +991,7 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reason   = " ".join(args)
     elif args:
         first = args[0]
+        # Cách 2: @username
         if first.startswith("@"):
             try:
                 chat        = await context.bot.get_chat(first)
@@ -939,6 +1001,7 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Không tìm thấy username này.")
                 return
             rest = args[1:]
+        # Cách 3: ID
         else:
             try:
                 target_id = int(first)
@@ -952,6 +1015,7 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             rest = args[1:]
 
+        # Parse thời hạn và lý do từ phần còn lại
         if rest:
             dur = parse_duration(rest[0])
             if dur:
@@ -959,19 +1023,25 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reason   = " ".join(rest[1:]) if len(rest) > 1 else "Vi phạm quy định"
             else:
                 reason   = " ".join(rest)
+
     else:
         await update.message.reply_text(
             "Cách dùng lệnh /ban:\n\n"
             "1. Bấm giữ tin nhắn → Trả lời → /ban <lý do>\n"
             "2. /ban @tentaikhoan <lý do>\n"
             "3. /ban 123456789 <lý do>\n\n"
-            "Cấm có thời hạn thêm 1g / 24g / 7ng trước lý do:\n"
-            "Ví dụ: /ban @abc 24g quay-roi\n\n"
+            "Ban có thời hạn:\n"
+            "/ban @tentaikhoan 1g <lý do> — cấm 1 giờ\n"
+            "/ban @tentaikhoan 24g <lý do> — cấm 24 giờ\n"
+            "/ban @tentaikhoan 7ng <lý do> — cấm 7 ngày\n\n"
             "Lý do gợi ý:\n"
-            "quay-roi / chia-se / spam\n"
-            "gia-mao / het-han / ban-lai\n"
-            "vi-pham / abuse / da-nghi\n"
-            "nhieu-tk / hoan-tien"
+            "quay-roi — Quấy rối thành viên\n"
+            "chia-se — Chia sẻ nội dung ra ngoài\n"
+            "spam — Spam tin nhắn\n"
+            "gia-mao — Tài khoản giả mạo\n"
+            "het-han — Hết hạn đăng ký\n"
+            "ban-lai — Bán lại quyền truy cập\n"
+            "vi-pham — Vi phạm quy định"
         )
         return
 
@@ -983,24 +1053,32 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Không thể ban admin.")
         return
 
+    # Dịch lý do nếu dùng mã gợi ý
     reason = LY_DO_GỢI_Ý.get(reason, reason)
+
     await _do_ban_member(update, context, target_id, target_name, reason, duration)
 
 # ==================== ADMIN: /unban ====================
 async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     target_id   = None
     target_name = "Không rõ"
     args        = context.args or []
 
+    # Cách 1: Reply
     if update.message.reply_to_message:
         target_user = update.message.reply_to_message.from_user
         target_id   = target_user.id
         target_name = target_user.full_name
     elif args:
         first = args[0]
+        # Cách 2: @username
         if first.startswith("@"):
             try:
                 chat        = await context.bot.get_chat(first)
@@ -1009,6 +1087,7 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 await update.message.reply_text("Không tìm thấy username này.")
                 return
+        # Cách 3: ID
         else:
             try:
                 target_id = int(first)
@@ -1038,6 +1117,7 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if result.deleted_count:
+        # Bỏ lệnh cấm trong nhóm nếu lệnh từ nhóm
         if update.effective_chat.type in ("group", "supergroup"):
             try:
                 await context.bot.unban_chat_member(
@@ -1046,6 +1126,7 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception:
                 pass
+
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -1057,14 +1138,19 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception:
             pass
+
         await update.message.reply_text(f"Đã gỡ cấm {target_name}.")
         await log_unban(context.application, target_id)
     else:
-        await update.message.reply_text(
-            "Không tìm thấy người dùng này trong danh sách cấm."
-                              )# ==================== ADMIN: /who ====================
+        await update.message.reply_text("Không tìm thấy người dùng này trong danh sách cấm.")
+
+# ==================== ADMIN: /who ====================
 async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     target_id = None
@@ -1088,9 +1174,9 @@ async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ban_doc    = await banned_col.find_one({"user_id": target_id})
 
     try:
-        chat     = await context.bot.get_chat(target_id)
-        name     = chat.full_name
-        username = f"@{chat.username}" if chat.username else "Không có"
+        chat      = await context.bot.get_chat(target_id)
+        name      = chat.full_name
+        username  = f"@{chat.username}" if chat.username else "Không có"
     except Exception:
         name     = "Không rõ"
         username = "Không rõ"
@@ -1110,7 +1196,7 @@ async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Username: {username}\n\n"
             f"Trạng thái: Đang bị cấm\n"
             f"Lý do: {reason}\n"
-            f"Loại: {ban_type}\n"
+            f"Loại ban: {ban_type}\n"
             f"Thời gian ban: {banned_str}\n"
             f"Hết hạn: {expire_str}",
             parse_mode="HTML"
@@ -1128,6 +1214,10 @@ async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /status ====================
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     albums_col = get_albums(context)
@@ -1135,10 +1225,10 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jobs_col   = get_jobs(context)
 
     try:
-        total_albums = await albums_col.count_documents({})
-        total_banned = await banned_col.count_documents({})
-        temp_banned  = await banned_col.count_documents({"expire_at": {"$ne": None}})
-        pending_jobs = await jobs_col.count_documents({"done": False})
+        total_albums  = await albums_col.count_documents({})
+        total_banned  = await banned_col.count_documents({})
+        temp_banned   = await banned_col.count_documents({"expire_at": {"$ne": None}})
+        pending_jobs  = await jobs_col.count_documents({"done": False})
         await update.message.reply_text(
             f"Trạng thái hệ thống:\n\n"
             f"Album: {total_albums}\n"
@@ -1153,13 +1243,17 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ADMIN: /help ====================
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await user_reply_temp(update, context,
+            "Bạn không có quyền sử dụng lệnh này.",
+            delay=120
+        )
         return
 
     await update.message.reply_text(
         "Hướng dẫn sử dụng:\n\n"
         "— QUẢN LÝ NỘI DUNG —\n"
         "/new — Tạo album mới\n"
-        "  Forward ảnh/video vào, gõ /done khi xong\n\n"
+        "  Sau đó forward ảnh/video vào, gõ /done khi xong\n\n"
         "/done — Lấy link chia sẻ\n\n"
         "/list — Danh sách tất cả album\n\n"
         "/detail — Danh sách album kèm link đầy đủ\n\n"
@@ -1207,6 +1301,7 @@ async def setup_db(application: Application):
     jobs_col   = db["jobs"]
     banned_col = db["banned"]
 
+    # Index tối ưu query
     await albums_col.create_index("key", unique=True)
     await jobs_col.create_index([("expire_at", 1), ("done", 1)])
     await banned_col.create_index("user_id", unique=True)
@@ -1226,10 +1321,9 @@ async def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    # Lệnh admin bị member gõ - add TRƯỚC handler admin
-    for cmd in ["new", "new_album", "done", "list", "detail", "check",
-                "del", "del_album", "clean", "ban", "unban", "who",
-                "status", "help"]:
+    # Lệnh admin bị member gõ - phải add TRƯỚC handler admin
+    for cmd in ["new","new_album","done","list","detail","check",
+                "del","del_album","clean","ban","unban","who","status","help"]:
         app.add_handler(CommandHandler(cmd, no_permission))
 
     # User
@@ -1278,4 +1372,3 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Bot crashed: {e} — khởi động lại sau 10 giây...")
             time.sleep(10)
-        
