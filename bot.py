@@ -289,8 +289,8 @@ async def save_user(context, user):
             }
         },
         upsert=True
-)
-    async def grant_vip(app: Application, user_id: int, user_name: str):
+    )
+async def grant_vip(app: Application, user_id: int, user_name: str):
     vip_col = app.bot_data["vip_col"]
     now     = datetime.now(timezone.utc)
 
@@ -606,7 +606,7 @@ async def start_web_server(mongo_client, tg_app):
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     logging.info(f"Web server on port {PORT}")
-    async def expire_worker(application: Application):
+async def expire_worker(application: Application):
     jobs_col = application.bot_data["jobs_col"]
     while True:
         try:
@@ -1020,7 +1020,7 @@ async def join_request_handler(update: Update,
             )
         except Exception:
             pass
-            async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user    = update.effective_user
     user_id = user.id
     app     = context.application
@@ -1327,8 +1327,8 @@ async def cmd_help_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — Hướng dẫn sử dụng\n\n"
         f"Hỗ trợ: {ADMIN_CONTACT}",
         delay=120
-                                    )
-    async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            )
+async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     if context.user_data.get("current_key"):
