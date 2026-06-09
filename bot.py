@@ -18,6 +18,7 @@ from telegram.error import Forbidden, BadRequest, TelegramError
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
+# ==================== ENV VARS ====================
 TOKEN             = os.environ.get("TOKEN")
 ADMIN_ID          = int(os.environ.get("ADMIN_ID", "0"))
 MONGO_URI         = os.environ.get("MONGO_URI")
@@ -40,14 +41,15 @@ def check_env():
         logging.critical(f"Thieu bien moi truong: {', '.join(missing)}")
         exit(1)
 
+# ==================== IN-MEMORY ====================
 request_log:        dict = defaultdict(list)
 invalid_attempts:   dict = defaultdict(int)
 rate_hit_count:     dict = defaultdict(int)
 nonmember_attempts: dict = defaultdict(int)
 warn_count:         dict = defaultdict(int)
 pending_kicks:      dict = {}
-pending_bans:       dict = {}
-awaiting_ban_time:  dict = {}
+pending_bans:       dict = {}   # {admin_id: {target_id, reason}}
+awaiting_ban_time:  dict = {}   # {admin_id: True}
 
 RATE_LIMIT_SEC = 5
 SPAM_WARN = 5; SPAM_TEMP = 8; SPAM_PERM = 60
@@ -142,6 +144,7 @@ async def db_retry(op, retries=3):
             err = e; logging.error(f"DB retry {i+1}: {e}"); await asyncio.sleep(1)
     raise err
 
+# ==================== LOG ====================
 async def send_log(app, text, markup=None):
     if not LOG_GROUP_ID: return
     try:
@@ -280,6 +283,7 @@ async def log_warning(app, user, behavior, count):
         f"Thoi gian: {now_str()}"
     )
 
+# ==================== BAN HELPER ====================
 async def do_ban(app, target_id, name, reason, ban_type="Tu dong", duration=None):
     banned_col = app.bot_data["banned_col"]
     expire_at  = datetime.now(timezone.utc) + duration if duration else None
@@ -305,12 +309,14 @@ async def save_user(context, user):
                           "is_muted": False, "total_views": 0}},
         upsert=True
     )
+
 # ==================== GRANT VIP ====================
 async def grant_vip(app, user_id, user_name, username=None):
     vip_col = app.bot_data["vip_col"]
     now     = datetime.now(timezone.utc)
     doc     = await vip_col.find_one({"user_id": user_id})
 
+    # Tinh ngay het han thong minh (cong don)
     if doc and doc.get("expire_at"):
         ea = doc["expire_at"]
         if ea.tzinfo is None: ea = ea.replace(tzinfo=timezone.utc)
@@ -357,6 +363,7 @@ async def grant_vip(app, user_id, user_name, username=None):
             reply_markup=kb,
             protect_content=True
         )
+        # Luu msg_id de sau nay xoa nut khi da vao
         await vip_col.update_one(
             {"user_id": user_id},
             {"$set": {"invite_msg_id": msg.message_id}}
@@ -412,6 +419,7 @@ async def is_vip(context, uid):
         logging.error(f"Check VIP: {e}")
         return False
 
+# ==================== KEEP-ALIVE + WEBHOOK ====================
 async def health_handler(req): return web.Response(text="ok")
 async def db_health(req):
     try:
@@ -559,6 +567,7 @@ async def vip_worker(app):
                         protect_content=True
                     )
                 except Exception: pass
+                # Giu nguyen data, chi set active=False
                 await vip_col.update_one(
                     {"_id": doc["_id"]},
                     {"$set": {"active": False, "expired_at": now}}
@@ -609,7 +618,7 @@ async def kick_if_not_confirmed(app, chat_id, user_id, message_id):
         banned_col = app.bot_data["banned_col"]
         await banned_col.update_one(
             {"user_id": user_id},
-{"$set": {"user_id": user_id, "name": name, "reason": "Vi pham luong noi quy qua 4 lan",
+            {"$set": {"user_id": user_id, "name": name, "reason": "Vi pham luong noi quy qua 4 lan",
                       "ban_type": "Tu dong", "expire_at": None,
                       "banned_at": datetime.now(timezone.utc)}},
             upsert=True
@@ -682,6 +691,7 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
             doc       = await vip_col.find_one({"user_id": user.id})
             expire_at = doc.get("pending_expire") if doc else None
             if not expire_at:
+                # Bao ton data cu neu co
                 old_ea = doc.get("expire_at") if doc else None
                 if old_ea and not doc.get("active", False):
                     if old_ea.tzinfo is None: old_ea = old_ea.replace(tzinfo=timezone.utc)
@@ -697,6 +707,7 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
                           "notified_7d": False, "notified_3d": False, "notified_1d": False}},
                 upsert=True
             )
+            # Xoa nut invite sau khi da vao thanh cong
             invite_msg_id = doc.get("invite_msg_id") if doc else None
             if invite_msg_id:
                 try:
@@ -706,6 +717,7 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception: pass
 
         elif old_status == "member" and new_status == "left":
+            # Bao ton data, chi set active=False
             await vip_col.update_one({"user_id": user.id}, {"$set": {"active": False}})
 
 # ==================== JOIN REQUEST HANDLER ====================
@@ -739,6 +751,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user  = update.effective_user
     data  = query.data
 
+    # Go ban
     if data.startswith("unban_") and user.id == ADMIN_ID:
         target_id  = int(data.split("_")[1])
         banned_col = get_banned(context)
@@ -752,6 +765,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await query.answer("Khong tim thay!")
         return
 
+    # Xac nhan noi quy
     if data.startswith("confirm_rules_"):
         target_id = int(data.split("_")[2])
         if user.id != target_id:
@@ -762,9 +776,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Chi xu ly neu dang bi mute (nguoi moi)
         if not user_doc or not user_doc.get("is_muted", False):
+            # Nguoi cu bam nham - bo qua hoan toan, khong log
             await query.answer()
             return
 
+        # Nguoi moi dang bi mute - xu ly
         await users_col.update_one(
             {"user_id": target_id},
             {"$set": {"is_muted": False, "rules_confirmed": True}}
@@ -791,11 +807,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             asyncio.create_task(process_referral_after_24h(context.application, target_id, ref_by))
         return
 
+    # Ban pha 2 - xac nhan thoi gian
     if data.startswith("ban_enter_time_") and user.id == ADMIN_ID:
         admin_id = int(data.split("_")[3])
         if admin_id != ADMIN_ID: await query.answer(); return
         awaiting_ban_time[ADMIN_ID] = True
-        await context.bot.send_message(
+        force_msg = await context.bot.send_message(
             chat_id=user.id,
             text="Nhap thoi gian cam (vi du: 1h, 2d, 30m):\n(h = gio, d = ngay, m = phut)",
             reply_markup=ForceReply(selective=True)
@@ -803,6 +820,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Nhap thoi gian cam ben duoi.")
         return
 
+    # Demo chon bo
     if data.startswith("demo_"):
         number = int(data.split("_")[1])
         asyncio.create_task(send_demo(context.application, user.id, number, query))
@@ -822,7 +840,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: ban_doc = None
 
     if ban_doc:
-        reason    = ban_doc.get("reason","Vi pham quy dinh")
+        reason   = ban_doc.get("reason","Vi pham quy dinh")
         expire_at = ban_doc.get("expire_at")
         if expire_at:
             es = expire_at.strftime("%d/%m/%Y %H:%M")
@@ -839,6 +857,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args or []
 
+    # Xu ly referral
     if args and args[0].startswith("ref_"):
         try:
             ref_id = int(args[0].replace("ref_",""))
@@ -850,12 +869,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError: pass
         args = []
 
+    # /start khong co args - tat ca user chi thay chao + /help
     if not args:
         await temp_reply(update, context,
-            "Chao mung ban den voi he thong.\n\nGo /help de xem danh sach lenh va huong dan su dung.",
+            f"Chao mung ban den voi he thong.\n\nGo /help de xem danh sach lenh va huong dan su dung.",
             delay=120)
         return
 
+    # Deep link xem noi dung
     key        = args[0]
     albums_col = get_albums(context)
     try: album = await db_retry(lambda: albums_col.find_one({"key": key}))
@@ -885,7 +906,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await log_warning(app, user, "Truy cap trai phep nhieu lan", count)
             nonmember_attempts[uid] = 0
         await temp_reply(update, context,
-            "Noi dung chi danh cho thanh vien VIP.\n\nGo /mua de xem huong dan mua VIP.",
+            f"Noi dung chi danh cho thanh vien VIP.\n\nGo /mua de xem huong dan mua VIP.",
             delay=300)
         return
 
@@ -896,6 +917,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Username: {'@'+user.username if user.username else 'Khong co'}\n"
         f"Album: <code>{key}</code>\nThoi gian: {now_str()}"
     )
+    # Luu tong luot xem
     users_col = get_users(context)
     await users_col.update_one({"user_id": uid}, {"$inc": {"total_views": 1}})
     await send_album(context, uid, album)
@@ -903,9 +925,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_album(context, uid, album):
     items    = album.get("items",[])
     if not items: return
-    total_sec    = sum(it.get("duration",0) for it in items if it["type"]=="video")
+    # Tinh dynamic timeout
+    total_sec = sum(it.get("duration",0) for it in items if it["type"]=="video")
     delete_after = total_sec + BUFFER_MINUTES * 60
-sent_ids = []
+
+    sent_ids = []
     if len(items) == 1:
         it = items[0]
         try:
@@ -936,10 +960,10 @@ sent_ids = []
 
 # ==================== DEMO SEND ====================
 async def send_demo(app, user_id, number, query=None):
-    users_col  = app.bot_data["users_col"]
-    demos_col  = app.bot_data["demos_col"]
+    users_col = app.bot_data["users_col"]
+    demos_col = app.bot_data["demos_col"]
     albums_col = app.bot_data["albums_col"]
-    user_doc   = await users_col.find_one({"user_id": user_id})
+    user_doc  = await users_col.find_one({"user_id": user_id})
     if not user_doc:
         if query: await query.answer("Khong tim thay thong tin cua ban!")
         return
@@ -974,10 +998,10 @@ async def send_demo(app, user_id, number, query=None):
     await users_col.update_one({"user_id": user_id}, {"$inc": {"invite_used": 1, "total_views": 1}})
     if query: await query.answer(f"Dang gui bo #{number}...")
 
-    items        = album.get("items",[])
-    total_sec    = sum(it.get("duration",0) for it in items if it["type"]=="video")
+    items    = album.get("items",[])
+    total_sec = sum(it.get("duration",0) for it in items if it["type"]=="video")
     delete_after = total_sec + BUFFER_MINUTES * 60
-    sent_ids     = []
+    sent_ids = []
     try:
         if len(items) == 1:
             it = items[0]
@@ -1010,6 +1034,7 @@ async def send_demo(app, user_id, number, query=None):
         )
     except Exception as e: logging.error(f"Send demo: {e}")
 
+
 # ==================== MEMBER COMMANDS ====================
 async def cmd_mua(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1018,8 +1043,8 @@ async def cmd_mua(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Lenh nay chi hoat dong trong chat rieng voi bot.\nBam: @{BOT_USERNAME}", delay=60)
         return
     await save_user(context, user)
-    qr_img = make_qr_img(user.id)
-    vietqr = make_vietqr(user.id)
+    qr_img  = make_qr_img(user.id)
+    vietqr  = make_vietqr(user.id)
     await log_mua(context.application, user)
     await temp_reply(update, context,
         f"Goi VIP 1 thang: {VIP_PRICE:,}d\n\n"
@@ -1080,9 +1105,10 @@ async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await temp_reply(update, context,
             f"Lenh nay chi hoat dong trong chat rieng voi bot.\nBam: @{BOT_USERNAME}", delay=60)
         return
-    args      = context.args or []
+    args = context.args or []
     demos_col = get_demos(context)
 
+    # Neu co so bo
     number = None
     if args:
         raw = args[0].lstrip("#")
@@ -1093,6 +1119,7 @@ async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(send_demo(context.application, user.id, number))
         return
 
+    # Hien danh sach bo co san
     users_col = get_users(context)
     doc = await users_col.find_one({"user_id": user.id})
     if not doc:
@@ -1137,6 +1164,15 @@ async def cmd_help_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
 
+    # Ban pha 2: ForceReply nhan thoi gian
+    if (awaiting_ban_time.get(ADMIN_ID)
+            and update.effective_chat.type == "private"
+            and update.message.reply_to_message
+            and not update.message.video
+            and not update.message.photo):
+        return  # xu ly o handler rieng
+
+    # Forward lay ID
     if update.message.forward_from:
         fwd   = update.message.forward_from
         uname = f"@{fwd.username}" if fwd.username else "Khong co"
@@ -1145,6 +1181,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Ten: {fwd.full_name}\nUsername: {uname}", parse_mode="HTML")
         return
 
+    # Nhom thuong: Admin gui media kem #N -> luu demo
     try: _gid = int(GROUP_ID) if GROUP_ID else None
     except: _gid = None
     if _gid and update.effective_chat.id == _gid:
@@ -1154,9 +1191,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             number    = int(m.group(1))
             demos_col = get_demos(context)
             if update.message.video:
-                file_id = update.message.video.file_id
+                file_id   = update.message.video.file_id
+                file_type = "video"
+                duration  = update.message.video.duration or 0
             elif update.message.photo:
-                file_id = update.message.photo[-1].file_id
+                file_id   = update.message.photo[-1].file_id
+                file_type = "photo"
+                duration  = 0
             else: return
             await demos_col.update_one(
                 {"number": number},
@@ -1170,32 +1211,34 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
+    # Chat rieng / DM voi admin: luu vao album hien tai
     if update.effective_chat.type != "private": return
     key = context.user_data.get("current_key")
     if not key: return
     albums_col = get_albums(context)
     if update.message.video:
-        file_id  = update.message.video.file_id
-        ftype    = "video"
-        duration = update.message.video.duration or 0
+        file_id   = update.message.video.file_id
+        file_type = "video"
+        duration  = update.message.video.duration or 0
     elif update.message.photo:
-        file_id  = update.message.photo[-1].file_id
-        ftype    = "photo"
-        duration = 0
+        file_id   = update.message.photo[-1].file_id
+        file_type = "photo"
+        duration  = 0
     else: return
     await albums_col.update_one(
         {"key": key},
-        {"$push": {"items": {"type": ftype, "file_id": file_id, "duration": duration}}}
+        {"$push": {"items": {"type": file_type, "file_id": file_id, "duration": duration}}}
     )
     album = await albums_col.find_one({"key": key}, {"items": 1})
     count = len(album.get("items",[])) if album else 0
-    await update.message.reply_text(f"Da nhan {ftype} — album co {count} file.\nGo /done khi xong.")
+    await update.message.reply_text(f"Da nhan {file_type} — album co {count} file.\nGo /done khi xong.")
 
+# Handler nhan ForceReply thoi gian ban
 async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     if update.effective_chat.type != "private": return
     if not awaiting_ban_time.get(ADMIN_ID): return
-if not update.message.reply_to_message: return
+    if not update.message.reply_to_message: return
 
     text = (update.message.text or "").strip()
     dur  = parse_duration(text)
@@ -1209,8 +1252,8 @@ if not update.message.reply_to_message: return
         await update.message.reply_text("Het phien. Vui long thuc hien lai lenh /ban.")
         return
 
-    target_id   = ban_info["target_id"]
-    reason      = ban_info["reason"]
+    target_id  = ban_info["target_id"]
+    reason     = ban_info["reason"]
     target_name = ban_info.get("target_name","Khong ro")
     awaiting_ban_time.pop(ADMIN_ID, None)
     pending_bans.pop(ADMIN_ID, None)
@@ -1245,6 +1288,7 @@ ADMIN_ONLY_CMDS = {"new","new_album","done","list","detail","check","del","del_a
                    "setlink","dellink","ban","who","extend","viplist","status","addluot","mock_pay"}
 
 async def admin_cmd_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin goc lenh he thong trong nhom thuong -> im lang ngoai nhom, DM nhac admin."""
     if update.effective_user.id != ADMIN_ID: return
     cmd = (update.message.text or "").split()[0].lstrip("/").split("@")[0].lower()
     if cmd in ADMIN_ONLY_CMDS:
@@ -1284,8 +1328,7 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Album chua co file nao.\nHay forward anh hoac video vao truoc."); return
     context.user_data.pop("current_key", None)
     count = len(album.get("items",[]))
-    await update.message.reply_text(
-        f"Hoan tat. Album co {count} file.\nKey: <code>{key}</code>\nLink chia se:", parse_mode="HTML")
+    await update.message.reply_text(f"Hoan tat. Album co {count} file.\nKey: <code>{key}</code>\nLink chia se:", parse_mode="HTML")
     await update.message.reply_text(make_link(key))
 
 async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1325,9 +1368,9 @@ async def check_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     albums_col = get_albums(context)
     album      = await albums_col.find_one({"key": key})
     if not album: await update.message.reply_text(f"Khong tim thay album {key}."); return
-    items     = album.get("items",[])
-    videos    = sum(1 for i in items if i["type"]=="video")
-    photos    = sum(1 for i in items if i["type"]=="photo")
+    items  = album.get("items",[])
+    videos = sum(1 for i in items if i["type"]=="video")
+    photos = sum(1 for i in items if i["type"]=="photo")
     total_dur = sum(it.get("duration",0) for it in items if it["type"]=="video")
     await update.message.reply_text(
         f"Album: <code>{key}</code>\n"
@@ -1399,6 +1442,7 @@ async def cmd_dellink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
+    # Neu goc trong nhom thuong -> im lang
     if update.effective_chat.type in ("group","supergroup"):
         try: await update.message.delete()
         except Exception: pass
@@ -1447,7 +1491,7 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target_id or target_id == ADMIN_ID:
         await update.message.reply_text("Khong the ban."); return
 
-    reason     = LY_DO.get(reason, reason)
+    reason = LY_DO.get(reason, reason)
     banned_col = get_banned(context)
     existing   = await banned_col.find_one({"user_id": target_id})
     if existing:
@@ -1508,6 +1552,7 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_unban(context.application, target_id)
     else:
         await update.message.reply_text("Khong tim thay trong danh sach cam.")
+
 async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     target_id = None
@@ -1648,13 +1693,16 @@ async def cmd_mock_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
-            "Dung: /mock_pay <ID> <so_tien>\nVi du: /mock_pay 123456789 119000"
+            "Dung: /mock_pay <ID> <so_tien> [noi_dung]\n"
+            "Vi du: /mock_pay 123456789 119000\n"
+            "Vi du: /mock_pay 123456789 50000 (chuyen thieu)"
         ); return
     try:
         target_id = int(context.args[0])
         amount    = int(context.args[1])
     except: await update.message.reply_text("ID va so tien phai la so."); return
-    content = f"SEVQR VIP {target_id}"
+    content = context.args[2] if len(context.args) > 2 else f"SEVQR VIP {target_id}"
+    if "SEVQR" not in content.upper(): content = f"SEVQR VIP {target_id}"
     await update.message.reply_text(f"Dang xu ly thanh toan gia lap: {amount:,}d cho ID {target_id}...")
     await process_payment(context.application, target_id, amount, ref="MOCK", content=content)
     await update.message.reply_text("Xu ly xong. Kiem tra log va DM cua user de xac nhan.")
@@ -1678,10 +1726,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  Vi du: /dellink 1\n\n"
         "— THANH VIEN —\n"
         "/ban [ID/@user] [Ly do] — Cam 2 pha (hoi them thoi gian)\n"
-        "  Thoi gian: 1h / 2d / 30m\n"
-        "  Ly do: quay-roi / chia-se / spam / gia-mao\n"
-        "  het-han / ban-lai / vi-pham / abuse\n"
-        "  da-nghi / nhieu-tk / hoan-tien\n"
+        "  Thoi gian: 1h / 2d / 30m (h=gio, d=ngay, m=phut)\n"
+        "  Ly do goi y: quay-roi / chia-se / spam / gia-mao\n"
+        "  het-han / ban-lai / vi-pham / abuse / da-nghi\n"
+        "  nhieu-tk / hoan-tien\n"
         "/unban [ID/@user] — Go cam\n"
         "/who <ID> — Xem thong tin tai khoan\n"
         "/addluot <ID> <so> — Them luot xem cho thanh vien\n\n"
@@ -1701,6 +1749,7 @@ async def no_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await temp_reply(update, context, "Ban khong co quyen su dung lenh nay.", delay=60)
 
+# ==================== SETUP DB ====================
 async def setup_db(app):
     client = AsyncIOMotorClient(
         MONGO_URI, maxPoolSize=10, minPoolSize=0,
@@ -1733,48 +1782,63 @@ async def setup_db(app):
     logging.info("DB connected!")
     return client
 
+# ==================== MAIN ====================
 async def main():
     check_env()
     app          = Application.builder().token(TOKEN).build()
     admin_filter = filters.User(user_id=ADMIN_ID)
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler(["new","new_album"], new_album,    filters=admin_filter))
-    app.add_handler(CommandHandler("done",             done,          filters=admin_filter))
-    app.add_handler(CommandHandler("list",             list_albums,   filters=admin_filter))
-    app.add_handler(CommandHandler("detail",           detail_albums, filters=admin_filter))
-    app.add_handler(CommandHandler("check",            check_album,   filters=admin_filter))
-    app.add_handler(CommandHandler(["del","del_album"],delete_album,  filters=admin_filter))
-    app.add_handler(CommandHandler("clean",            clean_albums,  filters=admin_filter))
-    app.add_handler(CommandHandler("setlink",          cmd_setlink,   filters=admin_filter))
-    app.add_handler(CommandHandler("dellink",          cmd_dellink,   filters=admin_filter))
-    app.add_handler(CommandHandler("ban",              ban_user,      filters=admin_filter))
-    app.add_handler(CommandHandler("unban",            unban_user,    filters=admin_filter))
-    app.add_handler(CommandHandler("who",              who_user,      filters=admin_filter))
-    app.add_handler(CommandHandler("extend",           extend_vip,    filters=admin_filter))
-    app.add_handler(CommandHandler("viplist",          vip_list,      filters=admin_filter))
-    app.add_handler(CommandHandler("status",           status_cmd,    filters=admin_filter))
-    app.add_handler(CommandHandler("help",             help_cmd,      filters=admin_filter))
-    app.add_handler(CommandHandler("addluot",          cmd_add_luot,  filters=admin_filter))
-    app.add_handler(CommandHandler("mock_pay",         cmd_mock_pay,  filters=admin_filter))
 
+    # Admin commands - chi trong DM
+    app.add_handler(CommandHandler(["new","new_album"], new_album,       filters=admin_filter))
+    app.add_handler(CommandHandler("done",             done,             filters=admin_filter))
+    app.add_handler(CommandHandler("list",             list_albums,      filters=admin_filter))
+    app.add_handler(CommandHandler("detail",           detail_albums,    filters=admin_filter))
+    app.add_handler(CommandHandler("check",            check_album,      filters=admin_filter))
+    app.add_handler(CommandHandler(["del","del_album"],delete_album,     filters=admin_filter))
+    app.add_handler(CommandHandler("clean",            clean_albums,     filters=admin_filter))
+    app.add_handler(CommandHandler("setlink",          cmd_setlink,      filters=admin_filter))
+    app.add_handler(CommandHandler("dellink",          cmd_dellink,      filters=admin_filter))
+    app.add_handler(CommandHandler("ban",              ban_user,         filters=admin_filter))
+    app.add_handler(CommandHandler("unban",            unban_user,       filters=admin_filter))
+    app.add_handler(CommandHandler("who",              who_user,         filters=admin_filter))
+    app.add_handler(CommandHandler("extend",           extend_vip,       filters=admin_filter))
+    app.add_handler(CommandHandler("viplist",          vip_list,         filters=admin_filter))
+    app.add_handler(CommandHandler("status",           status_cmd,       filters=admin_filter))
+    app.add_handler(CommandHandler("help",             help_cmd,         filters=admin_filter))
+    app.add_handler(CommandHandler("addluot",          cmd_add_luot,     filters=admin_filter))
+    app.add_handler(CommandHandler("mock_pay",         cmd_mock_pay,     filters=admin_filter))
+
+    # Member commands
     app.add_handler(CommandHandler("mua",        cmd_mua))
     app.add_handler(CommandHandler("luot",       cmd_luot))
     app.add_handler(CommandHandler("gioi_thieu", cmd_gioi_thieu))
     app.add_handler(CommandHandler("xem",        cmd_xem))
     app.add_handler(CommandHandler("help",       cmd_help_user, filters=~admin_filter))
 
+    # Media handler (admin - ca DM lan nhom thuong)
     app.add_handler(MessageHandler(
         (filters.VIDEO | filters.PHOTO | filters.FORWARDED) & admin_filter,
         handle_media
     ))
+
+    # ForceReply handler - ban pha 2
     app.add_handler(MessageHandler(
         filters.REPLY & filters.TEXT & admin_filter & filters.ChatType.PRIVATE,
         handle_ban_time
     ))
+
+    # Callback
     app.add_handler(CallbackQueryHandler(callback_handler))
+
+    # ChatMember
     app.add_handler(ChatMemberHandler(chat_member_updated, ChatMemberHandler.CHAT_MEMBER))
+
+    # ChatJoinRequest
     app.add_handler(ChatJoinRequestHandler(join_request_handler))
+
+    # Non-admin lenh
     app.add_handler(MessageHandler(filters.COMMAND & ~admin_filter, no_permission))
 
     async with app:
