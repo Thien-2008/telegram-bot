@@ -610,7 +610,7 @@ async def kick_if_not_confirmed(app, chat_id, user_id, message_id):
     if kick_count >= 4:
         banned_col = app.bot_data["banned_col"]
         await banned_col.update_one(
-            {"user_id": user_id}
+            {"user_id": user_id},
 {"$set": {"user_id": user_id, "name": name, "reason": "Vi pham luong noi quy qua 4 lan",
                       "ban_type": "Tu dong", "expire_at": None,
                       "banned_at": datetime.now(timezone.utc)}},
