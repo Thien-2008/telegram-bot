@@ -305,8 +305,6 @@ async def save_user(context, user):
                           "is_muted": False, "total_views": 0}},
         upsert=True
     )
-)
-
 # ==================== GRANT VIP ====================
 async def grant_vip(app, user_id, user_name, username=None):
     vip_col = app.bot_data["vip_col"]
