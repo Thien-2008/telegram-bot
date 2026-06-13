@@ -1988,6 +1988,12 @@ async def main():
     app          = Application.builder().token(TOKEN).build()
     admin_filter = filters.User(user_id=ADMIN_ID)
 
+    # Khai bao _gid_int o dau main() de dung xuyen suot
+    try:
+        _gid_int = int(GROUP_ID) if GROUP_ID else None
+    except Exception:
+        _gid_int = None
+
     app.add_handler(CommandHandler("start", start))
 
     # Admin commands - chi trong DM
@@ -2035,10 +2041,6 @@ async def main():
         handle_media
     ), group=0)
     # Bat so thuan tuy trong nhom thuong (chi admin, chi trong GROUP_ID)
-    try:
-        _gid_int = int(GROUP_ID) if GROUP_ID else None
-    except Exception:
-        _gid_int = None
     if _gid_int:
         app.add_handler(MessageHandler(
             filters.Regex(r'^\d+') & filters.Chat(_gid_int) & admin_filter,
