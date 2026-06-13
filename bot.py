@@ -116,7 +116,8 @@ def make_vietqr(uid):
 def now_str():
     return datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
 def sanitize(text, max_len=500):
-    text = str(text).replace("<","&lt;").replace(">","&gt;")
+    # Phai replace & truoc, tranh double-encode
+    text = str(text).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
     return text[:max_len]+"..." if len(text)>max_len else text
 def days_left(exp):
     now = datetime.now(timezone.utc)
@@ -446,9 +447,12 @@ async def sepay_handler(req):
     return web.Response(text='{"success":true}', content_type="application/json")
 
 async def process_payment(app, user_id, amount, ref="", content=""):
+    logging.info(f"process_payment: user_id={user_id} amount={amount}")
     payments_col = app.bot_data["payments_col"]
     users_col    = app.bot_data["users_col"]
     now          = datetime.now(timezone.utc)
+
+    # Buoc 1: Cong don tien vao payments (upsert)
     await payments_col.update_one(
         {"user_id": user_id},
         {"$inc": {"total_paid": amount},
@@ -456,28 +460,48 @@ async def process_payment(app, user_id, amount, ref="", content=""):
          "$setOnInsert": {"granted": False}},
         upsert=True
     )
+
+    # Buoc 2: Doc tong tien hien tai
     doc        = await payments_col.find_one({"user_id": user_id})
-    total_paid = doc.get("total_paid", 0)
-    granted    = doc.get("granted", False)
-    user_doc   = await users_col.find_one({"user_id": user_id})
-    user_name  = user_doc.get("full_name","Khong ro") if user_doc else "Khong ro"
-    username   = user_doc.get("username") if user_doc else None
-    if total_paid >= VIP_PRICE and not granted:
-        await payments_col.update_one({"user_id": user_id}, {"$set": {"granted": True}})
-        await grant_vip(app, user_id, user_name, username)
+    total_paid = doc.get("total_paid", 0) if doc else amount
+    granted    = doc.get("granted", False) if doc else False
+
+    logging.info(f"process_payment: total_paid={total_paid} granted={granted} vip_price={VIP_PRICE}")
+
+    user_doc  = await users_col.find_one({"user_id": user_id})
+    user_name = user_doc.get("full_name","Khong ro") if user_doc else "Khong ro"
+    username  = user_doc.get("username") if user_doc else None
+
+    if total_paid >= VIP_PRICE:
+        # Atomic: chi 1 luong duoc cap VIP, tranh race condition khi webhook den dong thoi
+        lock_doc = await payments_col.find_one_and_update(
+            {"user_id": user_id, "granted": False},
+            {"$set": {"granted": True}},
+            return_document=True
+        )
+        if lock_doc:
+            # Luong nay thang, thuc hien cap VIP
+            logging.info(f"process_payment: granting VIP to {user_id}")
+            result = await grant_vip(app, user_id, user_name, username)
+            logging.info(f"process_payment: grant_vip result={result}")
+        else:
+            # Luong khac da xu ly roi, bo qua tranh cap trung
+            logging.info(f"process_payment: VIP da cap roi cho {user_id}, bo qua")
+
     elif total_paid < VIP_PRICE and not granted:
         con_thieu = VIP_PRICE - total_paid
         await log_payment_partial(app, user_id, amount, total_paid)
         try:
             await app.bot.send_message(
                 chat_id=user_id,
-                text=(f"Da nhan {amount:,}d\n"
-                      f"Tong da nhan: {total_paid:,}d\n"
-                      f"Con thieu: {con_thieu:,}d\n\n"
-                      f"Vui long chuyen them de hoan tat."),
+                text=(f"Đã nhận {amount:,}đ\n"
+                      f"Tổng đã nhận: {total_paid:,}đ\n"
+                      f"Còn thiếu: {con_thieu:,}đ\n\n"
+                      f"Vui lòng chuyển thêm để hoàn tất."),
                 protect_content=True
             )
-        except Exception: pass
+        except Exception as e:
+            logging.warning(f"Không gửi được thông báo thiếu tiền cho {user_id}: {e}")
 
 async def start_web_server(mongo_client, tg_app):
     webapp = web.Application()
@@ -640,14 +664,17 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # NHOM THUONG
     if _gid and result.chat.id == _gid:
+        logging.info(f"ChatMember nhom thuong: {user.id} {old_status} -> {new_status}")
         if old_status in ("left","kicked") and new_status == "member":
             banned_col = get_banned(context)
             if await banned_col.find_one({"user_id": user.id}):
                 try: await context.bot.ban_chat_member(chat_id=_gid, user_id=user.id)
                 except Exception: pass
                 return
-            try: await context.bot.restrict_chat_member(chat_id=_gid, user_id=user.id, permissions=MUTED)
-            except Exception as e: logging.error(f"Mute: {e}")
+            try:
+                await context.bot.restrict_chat_member(chat_id=_gid, user_id=user.id, permissions=MUTED)
+                logging.info(f"Da mute user {user.id} trong nhom thuong")
+            except Exception as e: logging.error(f"Mute error: {e}")
 
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("Xac nhan noi quy", callback_data=f"confirm_rules_{user.id}")]])
             rules_text = (
@@ -712,10 +739,21 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             # Xoa nut invite sau khi da vao thanh cong
             invite_msg_id = doc.get("invite_msg_id") if doc else None
+            invite_url_old = doc.get("invite_url") if doc else None
+
+            # Xoa nut invite sau khi user vao thanh cong
             if invite_msg_id:
                 try:
                     await context.bot.edit_message_reply_markup(
                         chat_id=user.id, message_id=invite_msg_id, reply_markup=None
+                    )
+                except Exception: pass
+
+            # Revoke link invite de don dep tai nguyen
+            if invite_url_old:
+                try:
+                    await context.bot.revoke_chat_invite_link(
+                        chat_id=CHANNEL_ID, invite_link=invite_url_old
                     )
                 except Exception: pass
 
@@ -729,7 +767,13 @@ async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = req.from_user.id
     vip_col = context.application.bot_data["vip_col"]
     if str(req.chat.id) != str(CHANNEL_ID): return
-    doc = await vip_col.find_one({"user_id": user_id, "pending": True})
+
+    # Atomic findOneAndUpdate: chi 1 request duoc approve, chong spam click
+    doc = await vip_col.find_one_and_update(
+        {"user_id": user_id, "pending": True},
+        {"$set": {"pending": False}},
+        return_document=True
+    )
     if doc:
         try:
             await context.bot.approve_chat_join_request(chat_id=CHANNEL_ID, user_id=user_id)
@@ -837,6 +881,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid  = user.id
     app  = context.application
     await save_user(context, user)
+
+    # Check pending_notification: gui lai link VIP neu truoc do bi loi Forbidden
+    vip_col_check = context.application.bot_data["vip_col"]
+    pend_doc = await vip_col_check.find_one({
+        "user_id": uid,
+        "pending_notification": True
+    })
+    if pend_doc:
+        invite_url  = pend_doc.get("pending_invite_url")
+        expire_pend = pend_doc.get("pending_expire_at") or pend_doc.get("pending_expire")
+        if invite_url and expire_pend:
+            days_p = days_left(expire_pend)
+            kb_p   = InlineKeyboardMarkup([[InlineKeyboardButton(
+                "Bam vao day de vao kenh VIP", url=invite_url
+            )]])
+            try:
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=(f"Ban da thanh toan thanh cong truoc do.\n\n"
+                          f"Goi VIP co hieu luc den ngay "
+                          f"{expire_pend.strftime('%d/%m/%Y')} ({days_p} ngay).\n\n"
+                          f"Bam nut ben duoi de vao kenh VIP.\n"
+                          f"Link chi dung 1 lan."),
+                    reply_markup=kb_p,
+                    protect_content=True
+                )
+                await vip_col_check.update_one(
+                    {"user_id": uid},
+                    {"$set": {"pending_notification": False}}
+                )
+            except Exception as e:
+                logging.error(f"Re-send VIP link error: {e}")
 
     banned_col = get_banned(context)
     try: ban_doc = await db_retry(lambda: banned_col.find_one({"user_id": uid}))
@@ -1114,7 +1190,7 @@ async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Neu co so bo
     number = None
     if args:
-        raw = args[0].lstrip("#")
+        raw = args[0].lstrip("#").strip()
         if raw.isdigit():
             number = int(raw)
 
@@ -1287,13 +1363,26 @@ async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: _gid = None
 
     if _gid:
-        until_ts = int(time.time() + dur.total_seconds())
+        # Clamp: Telegram yeu cau 30s < until_date < 366 ngay
+        # Neu ngoai khoang nay, Telegram tu dong hieu la ban vinh vien
+        raw_secs = dur.total_seconds()
+        clamped  = max(31, min(raw_secs, 365 * 24 * 3600))
+        if clamped != raw_secs:
+            d_orig   = int(raw_secs // 3600) if raw_secs < 86400 else int(raw_secs // 86400)
+            d_clamp  = int(clamped // 3600) if clamped < 86400 else int(clamped // 86400)
+            unit_o   = "gio" if raw_secs < 86400 else "ngay"
+            unit_c   = "gio" if clamped < 86400 else "ngay"
+            await update.message.reply_text(
+                f"Thoi gian nhap ({d_orig} {unit_o}) vuot gioi han an toan.\n"
+                f"Da tu dong dieu chinh thanh {d_clamp} {unit_c}."
+            )
+        until_ts = int(datetime.now(timezone.utc).timestamp() + clamped)
         try:
             await context.bot.ban_chat_member(
                 chat_id=_gid, user_id=target_id, until_date=until_ts
             )
         except Exception as e:
-            await update.message.reply_text(f"Không thể kick khỏi nhóm: {e}")
+            await update.message.reply_text(f"Khong the kick khoi nhom: {e}")
             return
 
     await do_ban(context.application, target_id, target_name,
@@ -1858,11 +1947,16 @@ async def main():
         (filters.VIDEO | filters.PHOTO | filters.FORWARDED) & admin_filter,
         handle_media
     ))
-    # Bat text co #tag trong nhom thuong
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & admin_filter,
-        handle_text_hashtag
-    ))
+    # Bat so thuan tuy trong nhom thuong (chi admin, chi trong GROUP_ID)
+    try:
+        _gid_int = int(GROUP_ID) if GROUP_ID else None
+    except Exception:
+        _gid_int = None
+    if _gid_int:
+        app.add_handler(MessageHandler(
+            filters.Regex(r'^\d+') & filters.Chat(_gid_int) & admin_filter,
+            handle_text_hashtag
+        ))
 
     # ForceReply handler - ban pha 2
     app.add_handler(MessageHandler(
@@ -1892,13 +1986,29 @@ async def main():
         logging.info("Bot started!")
         await app.updater.start_polling(
             drop_pending_updates=True,
-            allowed_updates=["message","chat_member","callback_query","chat_join_request"]
+            allowed_updates=[
+                "message", "chat_member", "my_chat_member",
+                "callback_query", "chat_join_request"
+            ]
         )
         await asyncio.Event().wait()
 
+import signal, sys
+
+def handle_signal(signum, frame):
+    logging.info(f"Nhan tin hieu {signum}, dang tat bot an toan...")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_signal)
+signal.signal(signal.SIGINT,  handle_signal)
+
 if __name__ == "__main__":
     while True:
-        try: asyncio.run(main())
+        try:
+            asyncio.run(main())
+        except SystemExit:
+            logging.info("Bot da tat an toan (SystemExit).")
+            break
         except Exception as e:
             logging.error(f"Bot crashed: {e} - restart sau 10s...")
             time.sleep(10)
