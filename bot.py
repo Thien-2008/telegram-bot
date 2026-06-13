@@ -479,14 +479,20 @@ async def process_payment(app, user_id, amount, ref="", content=""):
             {"$set": {"granted": True}},
             return_document=True
         )
+        logging.info(f"process_payment: lock_doc={lock_doc is not None} user={user_id}")
         if lock_doc:
-            # Luong nay thang, thuc hien cap VIP
             logging.info(f"process_payment: granting VIP to {user_id}")
-            result = await grant_vip(app, user_id, user_name, username)
-            logging.info(f"process_payment: grant_vip result={result}")
+            try:
+                result = await grant_vip(app, user_id, user_name, username)
+                logging.info(f"process_payment: grant_vip result={result}")
+            except Exception as e:
+                logging.error(f"process_payment: grant_vip exception: {e}", exc_info=True)
         else:
-            # Luong khac da xu ly roi, bo qua tranh cap trung
-            logging.info(f"process_payment: VIP da cap roi cho {user_id}, bo qua")
+            logging.warning(
+                f"process_payment: lock_doc la None cho user {user_id}. "
+                f"Co the granted=True roi hoac user_id type mismatch. "
+                f"Doc hien tai: {await payments_col.find_one({'user_id': user_id})}"
+            )
 
     elif total_paid < VIP_PRICE and not granted:
         con_thieu = VIP_PRICE - total_paid
@@ -665,7 +671,9 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
     # NHOM THUONG
     if _gid and result.chat.id == _gid:
         logging.info(f"ChatMember nhom thuong: {user.id} {old_status} -> {new_status}")
-        if old_status in ("left","kicked") and new_status == "member":
+        # Them "restricted" vi Telegram doi khi tra ve restricted thay vi member khi rejoin
+        if (old_status in ("left","kicked") and
+                new_status in ("member","restricted")):
             banned_col = get_banned(context)
             if await banned_col.find_one({"user_id": user.id}):
                 try: await context.bot.ban_chat_member(chat_id=_gid, user_id=user.id)
@@ -762,6 +770,73 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
             await vip_col.update_one({"user_id": user.id}, {"$set": {"active": False}})
 
 # ==================== JOIN REQUEST HANDLER ====================
+async def new_chat_members_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fallback: bat su kien thanh vien moi/rejoin qua StatusUpdate."""
+    try: _gid = int(GROUP_ID) if GROUP_ID else None
+    except: _gid = None
+    if not _gid or update.effective_chat.id != _gid: return
+
+    for new_member in (update.message.new_chat_members or []):
+        if new_member.is_bot: continue
+        logging.info(f"NEW_CHAT_MEMBERS fallback: {new_member.id}")
+        banned_col = context.application.bot_data["banned_col"]
+        if await banned_col.find_one({"user_id": new_member.id}):
+            try: await context.bot.ban_chat_member(chat_id=_gid, user_id=new_member.id)
+            except Exception: pass
+            continue
+        # Kiem tra da mute chua (tranh xu ly trung voi ChatMemberHandler)
+        users_col = context.application.bot_data["users_col"]
+        user_doc  = await users_col.find_one({"user_id": new_member.id})
+        if user_doc and user_doc.get("is_muted"):
+            continue  # ChatMemberHandler da xu ly roi
+        # Mute + gui noi quy
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id=_gid, user_id=new_member.id, permissions=MUTED
+            )
+        except Exception as e:
+            logging.error(f"Fallback mute error: {e}")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "Xac nhan noi quy", callback_data=f"confirm_rules_{new_member.id}"
+        )]])
+        rules_text = (
+            f"Chao {new_member.full_name},\n\n"
+            f"NOI QUY CONG DONG {GROUP_NAME}\n\n"
+            f"TRACH NHIEM GIAM SAT: Neu phat hien thanh vien khac co hanh vi lam phien, "
+            f"spam hoac vi pham quy dinh, vui long gui anh chup man hinh bang chung cho Admin.\n\n"
+            f"TUONG TAC VAN MINH: Khong dang tai noi dung quang cao, "
+            f"lien ket spam hoac gui tin nhan rieng lam phien thanh vien khac.\n\n"
+            f"QUY TRINH DICH VU: Moi giao dich va nang cap quyen loi VIP deu thuc hien "
+            f"qua Bot tu dong. Neu co loi, vui long lien he Admin kem anh chup man hinh.\n\n"
+            f"QUYEN QUAN TRI: Quan tri vien co quyen loai bo thanh vien neu phat hien "
+            f"hanh vi lam dung hoac co tinh vi pham.\n\n"
+            f"Bang viec xac nhan, ban cam ket da doc va dong y voi cac quy dinh tren.\n\n"
+            f"Ban co 60 giay de xac nhan."
+        )
+        try:
+            msg = await context.bot.send_message(
+                chat_id=_gid, text=rules_text, reply_markup=kb
+            )
+            await users_col.update_one(
+                {"user_id": new_member.id},
+                {"$set": {"user_id": new_member.id, "username": new_member.username,
+                          "full_name": new_member.full_name,
+                          "is_muted": True, "rules_confirmed": False},
+                 "$setOnInsert": {"first_seen": datetime.now(timezone.utc),
+                                  "invite_earned": 0, "invite_used": 0,
+                                  "kick_count": 0, "rules_confirmed_before": False,
+                                  "total_views": 0}},
+                upsert=True
+            )
+            if new_member.id in pending_kicks:
+                pending_kicks[new_member.id].cancel()
+            task = asyncio.create_task(
+                kick_if_not_confirmed(context.application, _gid, new_member.id, msg.message_id)
+            )
+            pending_kicks[new_member.id] = task
+        except Exception as e:
+            logging.error(f"Fallback send rules error: {e}")
+
 async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     req     = update.chat_join_request
     user_id = req.from_user.id
@@ -1943,10 +2018,22 @@ async def main():
     app.add_handler(CommandHandler("help",       cmd_help_user, filters=~admin_filter))
 
     # Media handler (admin - ca DM lan nhom thuong)
+    # Handler media: dung CaptionRegex de bot nhan caption so trong nhom thuong
+    if _gid_int:
+        app.add_handler(MessageHandler(
+            (filters.VIDEO | filters.PHOTO) &
+            filters.CaptionRegex(r'^\d+') &
+            filters.Chat(_gid_int) &
+            admin_filter,
+            handle_media
+        ), group=0)
+    # Handler media DM admin (forward lay ID + tao album)
     app.add_handler(MessageHandler(
-        (filters.VIDEO | filters.PHOTO | filters.FORWARDED) & admin_filter,
+        (filters.VIDEO | filters.PHOTO | filters.FORWARDED) &
+        admin_filter &
+        filters.ChatType.PRIVATE,
         handle_media
-    ))
+    ), group=0)
     # Bat so thuan tuy trong nhom thuong (chi admin, chi trong GROUP_ID)
     try:
         _gid_int = int(GROUP_ID) if GROUP_ID else None
@@ -1959,22 +2046,39 @@ async def main():
         ))
 
     # ForceReply handler - ban pha 2
+    # handle_ban_time phai o group=0 va add truoc cac handler text khac
     app.add_handler(MessageHandler(
         filters.REPLY & filters.TEXT & admin_filter & filters.ChatType.PRIVATE,
         handle_ban_time
-    ))
+    ), group=0)
 
     # Callback
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     # ChatMember
     app.add_handler(ChatMemberHandler(chat_member_updated, ChatMemberHandler.CHAT_MEMBER))
+    # Fallback: bat NEW_CHAT_MEMBERS phong khi ChatMemberHandler miss rejoin
+    app.add_handler(MessageHandler(
+        filters.StatusUpdate.NEW_CHAT_MEMBERS,
+        new_chat_members_fallback
+    ), group=1)
 
     # ChatJoinRequest
     app.add_handler(ChatJoinRequestHandler(join_request_handler))
 
     # Non-admin lenh
     app.add_handler(MessageHandler(filters.COMMAND & ~admin_filter, no_permission))
+
+    # Global error handler - bat moi exception bi swallow
+    async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logging.error(f"Global error: {context.error}", exc_info=context.error)
+        if isinstance(update, Update) and update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "He thong gap loi. Vui long thu lai sau."
+                )
+            except Exception: pass
+    app.add_error_handler(global_error_handler)
 
     async with app:
         mongo_client = await setup_db(app)
@@ -2012,3 +2116,4 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Bot crashed: {e} - restart sau 10s...")
             time.sleep(10)
+
