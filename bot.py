@@ -61,12 +61,12 @@ LY_DO = {
     "quay-roi":  "Quay roi thanh vien",
     "chia-se":   "Chia se noi dung ra ngoai",
     "spam":      "Spam tin nhan",
-    "gia-mao":   "Tai khoan gia mao",
+    "gia-mao":   "Tài khoản gia mao",
     "het-han":   "Het han dang ky",
     "ban-lai":   "Ban lai quyen truy cap",
     "vi-pham":   "Vi pham quy dinh",
     "abuse":     "Hanh vi pha hoai",
-    "da-nghi":   "Tai khoan dang ngo",
+    "da-nghi":   "Tài khoản dang ngo",
     "nhieu-tk":  "Dung nhieu tai khoan",
     "hoan-tien": "Doi hoan tien/bung tien",
 }
@@ -110,6 +110,15 @@ def make_qr_img(uid):
     return (f"https://qr.sepay.vn/img?bank={BANK_NAME}&acc={BANK_ACCOUNT}"
             f"&template=compact&amount={VIP_PRICE}&des=SEVQR%20VIP%20{uid}")
 def make_vietqr(uid):
+    # Deeplink mo app VietinBank tren dien thoai
+    return (f"https://dl.vietqr.io/pay?app=vtb"
+            f"&ba={BANK_ACCOUNT}"
+            f"&bn={BANK_NAME}"
+            f"&am={VIP_PRICE}"
+            f"&tn=SEVQR%20VIP%20{uid}")
+
+def make_qr_img(uid):
+    # Anh QR de user luu va quet bang bat ky app ngan hang nao
     return (f"https://img.vietqr.io/image/{BANK_BIN}-{BANK_ACCOUNT}-compact.png"
             f"?amount={VIP_PRICE}&addInfo=SEVQR%20VIP%20{uid}")
 
@@ -158,130 +167,130 @@ async def send_log(app, text, markup=None):
 async def log_mua(app, user):
     uname = f"@{user.username}" if user.username else "Khong co"
     await send_log(app,
-        f"Khoi tao hoa don mua VIP\n"
+        f"Khởi tạo hóa đơn mua VIP\n"
         f"ID: <code>{user.id}</code>\n"
         f"Ten: {sanitize(user.full_name)}\n"
         f"Username: {uname}\n"
-        f"Goi: 1 Thang\n"
-        f"So tien: {VIP_PRICE:,}d\n"
-        f"Noi dung chuyen khoan: SEVQR VIP {user.id}\n"
-        f"Thoi gian: {now_str()}"
+        f"Gói: 1 Tháng\n"
+        f"Số tiền: {VIP_PRICE:,}d\n"
+        f"Nội dung chuyển khoản: SEVQR VIP {user.id}\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_payment_ok(app, user_id, name, username, amount, expire_at, pay_type):
     uname = f"@{username}" if username else "Khong co"
     await send_log(app,
-        f"Thanh toan VIP thanh cong\n"
+        f"Thanh toán VIP thành công\n"
         f"ID: <code>{user_id}</code>\n"
         f"Ten: {sanitize(name)}\n"
         f"Username: {uname}\n"
-        f"So tien nhan: {amount:,}d\n"
-        f"Han VIP moi: {expire_at.strftime('%d/%m/%Y')}\n"
-        f"Loai: {pay_type}\n"
-        f"Thoi gian: {now_str()}"
+        f"Số tiền nhận: {amount:,}d\n"
+        f"Hạn VIP mới: {expire_at.strftime('%d/%m/%Y')}\n"
+        f"Loại: {pay_type}\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_extend(app, target_id, days, expire_at):
     await send_log(app,
-        f"Gia han VIP thu cong\n"
-        f"ID nguoi nhan: <code>{target_id}</code>\n"
-        f"So ngay cong them: {days} ngay\n"
-        f"Han VIP moi: {expire_at.strftime('%d/%m/%Y')}\n"
-        f"Thoi gian: {now_str()}"
+        f"Gia hạn VIP thủ công\n"
+        f"ID người nhận: <code>{target_id}</code>\n"
+        f"Số ngày cộng thêm: {days} ngay\n"
+        f"Hạn VIP mới: {expire_at.strftime('%d/%m/%Y')}\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_vip_approved(app, user_id, name, username):
     uname = f"@{username}" if username else "Khong co"
     await send_log(app,
-        f"Tu dong duyet vao kenh VIP\n"
+        f"Tự động duyệt vào kênh VIP\n"
         f"ID: <code>{user_id}</code>\n"
         f"Ten: {sanitize(name)}\n"
         f"Username: {uname}\n"
-        f"Trang thai: Hop le\n"
-        f"Thoi gian: {now_str()}"
+        f"Trạng thái: Hợp lệ\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_vip_rejected(app, user_id, name, username):
     uname = f"@{username}" if username else "Khong co"
     await send_log(app,
-        f"Tu choi vao kenh VIP\n"
+        f"Từ chối vào kênh VIP\n"
         f"ID: <code>{user_id}</code>\n"
         f"Ten: {sanitize(name)}\n"
         f"Username: {uname}\n"
-        f"Trang thai: Khong hop le\n"
-        f"Thoi gian: {now_str()}"
+        f"Trạng thái: Không hợp lệ\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_rules_confirm(app, user_id, name, username, status):
     uname = f"@{username}" if username else "Khong co"
     await send_log(app,
-        f"Xac nhan noi quy\n"
+        f"Xác nhận nội quy\n"
         f"ID: <code>{user_id}</code>\n"
         f"Ten: {sanitize(name)}\n"
         f"Username: {uname}\n"
-        f"Trang thai: {status}\n"
-        f"Thoi gian: {now_str()}"
+        f"Trạng thái: {status}\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_kick(app, user_id, name, username, kick_count):
     uname = f"@{username}" if username else "Khong co"
     await send_log(app,
-        f"Tu dong da nguoi dung\n"
+        f"Tự động đá người dùng\n"
         f"ID: <code>{user_id}</code>\n"
         f"Ten: {sanitize(name)}\n"
         f"Username: {uname}\n"
-        f"Ly do: Qua 60 giay khong xac nhan noi quy\n"
-        f"So lan vi pham: {kick_count}\n"
-        f"Thoi gian: {now_str()}"
+        f"Lý do: Quá 60 giây không xác nhận nội quy\n"
+        f"Số lần vi phạm: {kick_count}\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_auto_ban(app, user_id, name, username, reason):
     uname = f"@{username}" if username else "Khong co"
     await send_log(app,
-        f"Tu dong ban vinh vien\n"
+        f"Tự động ban vĩnh viễn\n"
         f"ID: <code>{user_id}</code>\n"
         f"Ten: {sanitize(name)}\n"
         f"Username: {uname}\n"
-        f"Ly do: {reason}\n"
-        f"Thoi gian: {now_str()}"
+        f"Lý do: {reason}\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_ban_action(app, target_id, name, reason, ban_type, show_btn=False):
     kb = None
     if show_btn:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Go ban ngay", callback_data=f"unban_{target_id}")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Gỡ ban ngay", callback_data=f"unban_{target_id}")]])
     await send_log(app,
-        f"Ban nguoi dung\n"
+        f"Ban người dùng\n"
         f"ID: <code>{target_id}</code>\n"
         f"Ten: {sanitize(str(name))}\n"
-        f"Ly do: {sanitize(reason)}\n"
-        f"Loai: {ban_type}\n"
-        f"Thoi gian: {now_str()}", markup=kb
+        f"Lý do: {sanitize(reason)}\n"
+        f"Loại: {ban_type}\n"
+        f"Thời gian: {now_str()}", markup=kb
     )
 
 async def log_unban(app, target_id):
-    await send_log(app, f"Huy ban\nID: <code>{target_id}</code>\nThoi gian: {now_str()}")
+    await send_log(app, f"Hủy ban\nID: <code>{target_id}</code>\nThời gian: {now_str()}")
 
 async def log_payment_partial(app, user_id, amount, total):
     await send_log(app,
-        f"Thanh toan chua du\n"
+        f"Thanh toán chưa đủ\n"
         f"ID: <code>{user_id}</code>\n"
-        f"Lan nay: {amount:,}d\n"
-        f"Tong da tra: {total:,}d\n"
-        f"Con thieu: {VIP_PRICE - total:,}d\n"
-        f"Thoi gian: {now_str()}"
+        f"Lần này: {amount:,}d\n"
+        f"Tổng đã trả: {total:,}d\n"
+        f"Còn thiếu: {VIP_PRICE - total:,}d\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def log_warning(app, user, behavior, count):
     uname = f"@{user.username}" if user.username else "Khong co"
     await send_log(app,
-        f"Canh bao hanh vi bat thuong\n"
+        f"Cảnh báo hành vi bất thường\n"
         f"ID: <code>{user.id}</code>\n"
         f"Ten: {sanitize(user.full_name)}\n"
         f"Username: {uname}\n"
-        f"Hanh vi: {sanitize(behavior)}\n"
-        f"So lan: {count}\n"
-        f"Thoi gian: {now_str()}"
+        f"Hành vi: {sanitize(behavior)}\n"
+        f"Số lần: {count}\n"
+        f"Thời gian: {now_str()}"
     )
 
 # ==================== BAN HELPER ====================
@@ -322,10 +331,10 @@ async def grant_vip(app, user_id, user_name, username=None):
         ea = doc["expire_at"]
         if ea.tzinfo is None: ea = ea.replace(tzinfo=timezone.utc)
         base = max(ea, now)
-        pay_type = "Gia han noi tiep (Da cong don)"
+        pay_type = "Gia hạn nối tiếp (Đã cộng dồn)"
     else:
         base = now
-        pay_type = "Mua moi (Kich hoat lan dau)"
+        pay_type = "Mua mới (Kích hoạt lần đầu)"
     expire_at = base + relativedelta(months=1)
 
     try:
@@ -352,15 +361,15 @@ async def grant_vip(app, user_id, user_name, username=None):
 
     days = days_left(expire_at)
     kb   = InlineKeyboardMarkup([[InlineKeyboardButton(
-        "Bam vao day de vao kenh VIP", url=invite_url
+        "Bấm vào đây để vào kênh VIP", url=invite_url
     )]])
     try:
         msg = await app.bot.send_message(
             chat_id=user_id,
-            text=(f"Thanh toan thanh cong\n\n"
-                  f"Goi VIP co hieu luc den ngay {expire_at.strftime('%d/%m/%Y')} ({days} ngay).\n\n"
-                  f"Bam nut ben duoi de vao kenh VIP.\n"
-                  f"Link chi dung 1 lan, het han sau 48 gio."),
+            text=(f"Thanh toán thành công\n\n"
+                  f"Gói VIP có hiệu lực đến ngày {expire_at.strftime('%d/%m/%Y')} ({days} ngay).\n\n"
+                  f"Bấm nút bên dưới để vào kênh VIP.\n"
+                  f"Link chỉ dùng 1 lần, hết hạn sau 48 giờ."),
             reply_markup=kb,
             protect_content=True
         )
@@ -391,15 +400,15 @@ async def check_user(update, context):
     if count >= SPAM_PERM:
         await do_ban(app, uid, user.full_name, "Spam 60 lan trong 1 phut")
         await temp_reply(update, context,
-            f"Quyen truy cap bi thu hoi vinh vien.\nLy do: Spam 60 lan trong 1 phut.\n"
-            f"Neu ban nghi lenh cam do nham lan, lien he: {ADMIN_CONTACT}", delay=300)
+            f"Quyền truy cập bị thu hồi vĩnh viễn.\nLý do: Spam 60 lan trong 1 phut.\n"
+            f"Nếu bạn nghĩ lệnh cấm do nhầm lẫn, liên hệ: {ADMIN_CONTACT}", delay=300)
         return True
     if count >= SPAM_TEMP:
         warn_count[uid] += 1
         dur = timedelta(hours=24) if warn_count[uid] >= 2 else timedelta(hours=1)
         await do_ban(app, uid, user.full_name, "Lam dung he thong", duration=dur)
         await temp_reply(update, context,
-            f"Tai khoan bi tam khoa do hanh vi bat thuong.\nLien he admin: {ADMIN_CONTACT}", delay=60)
+            f"Tài khoản bị tạm khóa do hành vi bất thường.\nLiên hệ admin: {ADMIN_CONTACT}", delay=60)
         return True
     if count >= SPAM_WARN:
         await log_warning(app, user, "Spam request nhieu lan", count)
@@ -469,7 +478,7 @@ async def process_payment(app, user_id, amount, ref="", content=""):
     logging.info(f"process_payment: total_paid={total_paid} granted={granted} vip_price={VIP_PRICE}")
 
     user_doc  = await users_col.find_one({"user_id": user_id})
-    user_name = user_doc.get("full_name","Khong ro") if user_doc else "Khong ro"
+    user_name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
     username  = user_doc.get("username") if user_doc else None
 
     if total_paid >= VIP_PRICE:
@@ -535,7 +544,7 @@ async def expire_worker(app):
                 try:
                     await app.bot.send_message(
                         chat_id=job["chat_id"],
-                        text="Noi dung cua ban da het han.\nVao kenh VIP de lay link xem lai nhe",
+                        text="Nội dung của bạn đã hết hạn.\nVào kênh VIP để lấy link xem lại nhé",
                         protect_content=True
                     )
                 except Exception: pass
@@ -554,7 +563,7 @@ async def unban_worker(app):
                 try:
                     await app.bot.send_message(
                         chat_id=tid,
-                        text="Lenh tam khoa da het han.\nQuyen truy cap da duoc khoi phuc.",
+                        text="Lệnh tạm khóa đã hết hạn.\nQuyền truy cập đã được khôi phục.",
                         protect_content=True
                     )
                 except Exception: pass
@@ -568,9 +577,9 @@ async def vip_worker(app):
         try:
             now = datetime.now(timezone.utc)
             for db, field, msg in [
-                (7,"notified_7d","Goi VIP cua ban se het han sau 7 ngay."),
-                (3,"notified_3d","Goi VIP cua ban se het han sau 3 ngay."),
-                (1,"notified_1d","Goi VIP cua ban se het han vao ngay mai."),
+                (7,"notified_7d","Goi VIP cua ban sẽ hết hạn sau 7 ngày."),
+                (3,"notified_3d","Goi VIP cua ban sẽ hết hạn sau 3 ngày."),
+                (1,"notified_1d","Goi VIP cua ban sẽ hết hạn vào ngày mai."),
             ]:
                 async for doc in vip_col.find({
                     "expire_at": {"$lte": now+timedelta(days=db), "$gt": now+timedelta(days=db-1)},
@@ -579,7 +588,7 @@ async def vip_worker(app):
                     try:
                         await app.bot.send_message(
                             chat_id=doc["user_id"],
-                            text=f"{msg}\nLien he admin de gia han: {ADMIN_CONTACT}",
+                            text=f"{msg}\nLiên hệ admin để gia hạn: {ADMIN_CONTACT}",
                             protect_content=True
                         )
                         await vip_col.update_one({"_id": doc["_id"]}, {"$set": {field: True}})
@@ -593,7 +602,7 @@ async def vip_worker(app):
                 try:
                     await app.bot.send_message(
                         chat_id=uid,
-                        text=f"Goi VIP cua ban da het han.\nLien he admin de gia han: {ADMIN_CONTACT}",
+                        text=f"Goi VIP cua ban đã hết hạn.\nLiên hệ admin để gia hạn: {ADMIN_CONTACT}",
                         protect_content=True
                     )
                 except Exception: pass
@@ -603,8 +612,8 @@ async def vip_worker(app):
                     {"$set": {"active": False, "expired_at": now}}
                 )
                 await send_log(app,
-                    f"VIP het han\nID: <code>{uid}</code>\n"
-                    f"Ten: {sanitize(doc.get('full_name',''))}\nThoi gian: {now_str()}"
+                    f"VIP hết hạn\nID: <code>{uid}</code>\n"
+                    f"Ten: {sanitize(doc.get('full_name',''))}\nThời gian: {now_str()}"
                 )
         except Exception as e: logging.error(f"VIP worker: {e}")
         await asyncio.sleep(3600)
@@ -621,8 +630,8 @@ async def process_referral_after_24h(app, new_uid, ref_by):
         earned  = updated.get("invite_earned", 0)
         await app.bot.send_message(
             chat_id=ref_by,
-            text=f"Nguoi ban gioi thieu da o lai nhom du 24 gio.\n"
-                 f"Ban nhan duoc 1 luot xem.\nTong luot hien tai: {earned}/15",
+            text=f"Người bạn giới thiệu đã ở lại nhóm đủ 24 giờ.\n"
+                 f"Bạn nhận được 1 lượt xem.\nTổng lượt hiện tại: {earned}/15",
             protect_content=True
         )
     except Exception: pass
@@ -641,19 +650,19 @@ async def kick_if_not_confirmed(app, chat_id, user_id, message_id):
     await users_col.update_one({"user_id": user_id}, {"$inc": {"kick_count": 1}}, upsert=True)
     doc        = await users_col.find_one({"user_id": user_id})
     kick_count = doc.get("kick_count", 1) if doc else 1
-    name       = doc.get("full_name","Khong ro") if doc else "Khong ro"
+    name       = doc.get("full_name","Không rõ") if doc else "Không rõ"
     username   = doc.get("username") if doc else None
     await log_kick(app, user_id, name, username, kick_count)
     if kick_count >= 4:
         banned_col = app.bot_data["banned_col"]
         await banned_col.update_one(
             {"user_id": user_id},
-            {"$set": {"user_id": user_id, "name": name, "reason": "Vi pham luong noi quy qua 4 lan",
+            {"$set": {"user_id": user_id, "name": name, "reason": "Vi phạm luồng nội quy quá 4 lần",
                       "ban_type": "Tu dong", "expire_at": None,
                       "banned_at": datetime.now(timezone.utc)}},
             upsert=True
         )
-        await log_auto_ban(app, user_id, name, username, "Vi pham luong noi quy qua 4 lan")
+        await log_auto_ban(app, user_id, name, username, "Vi phạm luồng nội quy quá 4 lần")
     if user_id in pending_kicks: del pending_kicks[user_id]
 
 # ==================== CHAT MEMBER HANDLER ====================
@@ -684,21 +693,21 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
                 logging.info(f"Da mute user {user.id} trong nhom thuong")
             except Exception as e: logging.error(f"Mute error: {e}")
 
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Xac nhan noi quy", callback_data=f"confirm_rules_{user.id}")]])
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Xác nhận nội quy", callback_data=f"confirm_rules_{user.id}")]])
             rules_text = (
                 f"Chao {user.full_name},\n\n"
-                f"NOI QUY CONG DONG {GROUP_NAME}\n\n"
-                f"TRACH NHIEM GIAM SAT: Neu phat hien thanh vien khac co hanh vi lam phien, "
+                f"NỘI QUY CỘNG ĐỒNG {GROUP_NAME}\n\n"
+                f"TRÁCH NHIỆM GIÁM SÁT: Neu phat hien thanh vien khac co hanh vi lam phien, "
                 f"spam hoac vi pham quy dinh, vui long gui anh chup man hinh bang chung truc "
                 f"tiep cho Admin.\n\n"
-                f"TUONG TAC VAN MINH: Khong dang tai noi dung quang cao, lien ket spam hoac "
+                f"TƯƠNG TÁC VĂN MINH: Khong dang tai noi dung quang cao, lien ket spam hoac "
                 f"gui tin nhan rieng lam phien thanh vien khac.\n\n"
-                f"QUY TRINH DICH VU: Moi giao dich va nang cap quyen loi VIP deu phai thuc "
+                f"QUY TRÌNH DỊCH VỤ: Moi giao dich va nang cap quyen loi VIP deu phai thuc "
                 f"hien thong qua Bot tu dong. Neu co loi, vui long lien he Admin kem anh chup man hinh.\n\n"
-                f"QUYEN QUAN TRI: Quan tri vien co quyen loai bo thanh vien neu phat hien hanh "
+                f"QUYỀN QUẢN TRỊ: Quan tri vien co quyen loai bo thanh vien neu phat hien hanh "
                 f"vi lam dung hoac co tinh vi pham.\n\n"
-                f"Bang viec xac nhan, ban cam ket da doc va dong y voi cac quy dinh tren.\n\n"
-                f"Ban co 60 giay de xac nhan."
+                f"Bằng việc xác nhận, bạn cam kết đã đọc và đồng ý với các quy định trên.\n\n"
+                f"Bạn có 60 giây để xác nhận."
             )
             try:
                 msg = await context.bot.send_message(chat_id=_gid, text=rules_text, reply_markup=kb)
@@ -797,21 +806,21 @@ async def new_chat_members_fallback(update: Update, context: ContextTypes.DEFAUL
         except Exception as e:
             logging.error(f"Fallback mute error: {e}")
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-            "Xac nhan noi quy", callback_data=f"confirm_rules_{new_member.id}"
+            "Xác nhận nội quy", callback_data=f"confirm_rules_{new_member.id}"
         )]])
         rules_text = (
             f"Chao {new_member.full_name},\n\n"
-            f"NOI QUY CONG DONG {GROUP_NAME}\n\n"
-            f"TRACH NHIEM GIAM SAT: Neu phat hien thanh vien khac co hanh vi lam phien, "
+            f"NỘI QUY CỘNG ĐỒNG {GROUP_NAME}\n\n"
+            f"TRÁCH NHIỆM GIÁM SÁT: Neu phat hien thanh vien khac co hanh vi lam phien, "
             f"spam hoac vi pham quy dinh, vui long gui anh chup man hinh bang chung cho Admin.\n\n"
-            f"TUONG TAC VAN MINH: Khong dang tai noi dung quang cao, "
+            f"TƯƠNG TÁC VĂN MINH: Khong dang tai noi dung quang cao, "
             f"lien ket spam hoac gui tin nhan rieng lam phien thanh vien khac.\n\n"
-            f"QUY TRINH DICH VU: Moi giao dich va nang cap quyen loi VIP deu thuc hien "
+            f"QUY TRÌNH DỊCH VỤ: Moi giao dich va nang cap quyen loi VIP deu thuc hien "
             f"qua Bot tu dong. Neu co loi, vui long lien he Admin kem anh chup man hinh.\n\n"
-            f"QUYEN QUAN TRI: Quan tri vien co quyen loai bo thanh vien neu phat hien "
+            f"QUYỀN QUẢN TRỊ: Quan tri vien co quyen loai bo thanh vien neu phat hien "
             f"hanh vi lam dung hoac co tinh vi pham.\n\n"
-            f"Bang viec xac nhan, ban cam ket da doc va dong y voi cac quy dinh tren.\n\n"
-            f"Ban co 60 giay de xac nhan."
+            f"Bằng việc xác nhận, bạn cam kết đã đọc và đồng ý với các quy định trên.\n\n"
+            f"Bạn có 60 giây để xác nhận."
         )
         try:
             msg = await context.bot.send_message(
@@ -860,7 +869,7 @@ async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await context.bot.decline_chat_join_request(chat_id=CHANNEL_ID, user_id=user_id)
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"Yeu cau vao kenh VIP bi tu choi.\nVui long thanh toan truoc.\nGo /mua de xem huong dan.",
+                text=f"Yêu cầu vào kênh VIP bị từ chối.\nVui lòng thanh toán trước.\nGo /mua de xem huong dan.",
                 protect_content=True
             )
             await log_vip_rejected(context.application, user_id,
@@ -879,19 +888,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         banned_col = get_banned(context)
         result     = await banned_col.delete_one({"user_id": target_id})
         if result.deleted_count:
-            try: await context.bot.send_message(chat_id=target_id, text="Quyen truy cap da duoc khoi phuc.", protect_content=True)
+            try: await context.bot.send_message(chat_id=target_id, text="Quyền truy cập đã được khôi phục.", protect_content=True)
             except Exception: pass
-            await query.answer("Da go ban!")
-            await query.edit_message_text(query.message.text + f"\n\nDa go ban luc {now_str()}")
+            await query.answer("Đã gỡ ban!")
+            await query.edit_message_text(query.message.text + f"\n\nĐã gỡ ban lúc {now_str()}")
             await log_unban(context.application, target_id)
-        else: await query.answer("Khong tim thay!")
+        else: await query.answer("Không tìm thấy!")
         return
 
-    # Xac nhan noi quy
+    # Xác nhận nội quy
     if data.startswith("confirm_rules_"):
         target_id = int(data.split("_")[2])
         if user.id != target_id:
-            await query.answer("Day khong phai nut danh cho ban!")
+            await query.answer("Đây không phải nút dành cho bạn!")
             return
         users_col = get_users(context)
         user_doc  = await users_col.find_one({"user_id": target_id})
@@ -917,10 +926,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
         try: await query.message.delete()
         except Exception: pass
-        await query.answer("Xac nhan thanh cong! Chao mung ban.")
+        await query.answer("Xác nhận thành công! Chào mừng bạn.")
 
         is_new     = not user_doc.get("rules_confirmed_before", False)
-        status_txt = "Lan dau vao nhom" if is_new else "Da tung vao truoc do - Tham gia lai"
+        status_txt = "Lần đầu vào nhóm" if is_new else "Đã từng vào trước đó - Tham gia lại"
         await users_col.update_one({"user_id": target_id}, {"$set": {"rules_confirmed_before": True}})
         await log_rules_confirm(context.application, target_id,
                                 user_doc.get("full_name",""), user_doc.get("username"), status_txt)
@@ -936,10 +945,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         awaiting_ban_time[ADMIN_ID] = True
         force_msg = await context.bot.send_message(
             chat_id=user.id,
-            text="Nhap thoi gian cam (vi du: 1h, 2d, 30m):\n(h = gio, d = ngay, m = phut)",
+            text="Nhập thời gian cấm (vi du: 1h, 2d, 30m):\n(h = giờ, d = ngày, m = phút)",
             reply_markup=ForceReply(selective=True)
         )
-        await query.answer("Nhap thoi gian cam ben duoi.")
+        await query.answer("Nhập thời gian cấm ben duoi.")
         return
 
     # Demo chon bo
@@ -969,16 +978,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if invite_url and expire_pend:
             days_p = days_left(expire_pend)
             kb_p   = InlineKeyboardMarkup([[InlineKeyboardButton(
-                "Bam vao day de vao kenh VIP", url=invite_url
+                "Bấm vào đây để vào kênh VIP", url=invite_url
             )]])
             try:
                 await context.bot.send_message(
                     chat_id=uid,
-                    text=(f"Ban da thanh toan thanh cong truoc do.\n\n"
-                          f"Goi VIP co hieu luc den ngay "
+                    text=(f"Bạn đã thanh toán thành công trước đó.\n\n"
+                          f"Gói VIP có hiệu lực đến ngày "
                           f"{expire_pend.strftime('%d/%m/%Y')} ({days_p} ngay).\n\n"
-                          f"Bam nut ben duoi de vao kenh VIP.\n"
-                          f"Link chi dung 1 lan."),
+                          f"Bấm nút bên dưới để vào kênh VIP.\n"
+                          f"Link chỉ dùng 1 lần."),
                     reply_markup=kb_p,
                     protect_content=True
                 )
@@ -999,12 +1008,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if expire_at:
             es = expire_at.strftime("%d/%m/%Y %H:%M")
             await temp_reply(update, context,
-                f"Tai khoan dang bi tam khoa.\nLy do: {reason}\nHet han luc: {es}\n\n"
-                f"Neu ban nghi lenh cam do nham lan, lien he: {ADMIN_CONTACT}", delay=300)
+                f"Tài khoản đang bị tạm khóa.\nLý do: {reason}\nHết hạn lúc: {es}\n\n"
+                f"Nếu bạn nghĩ lệnh cấm do nhầm lẫn, liên hệ: {ADMIN_CONTACT}", delay=300)
         else:
             await temp_reply(update, context,
-                f"Quyen truy cap da bi thu hoi.\nLy do: {reason}\n\n"
-                f"Neu ban nghi lenh cam do nham lan, lien he: {ADMIN_CONTACT}", delay=300)
+                f"Quyền truy cập đã bị thu hồi.\nLý do: {reason}\n\n"
+                f"Nếu bạn nghĩ lệnh cấm do nhầm lẫn, liên hệ: {ADMIN_CONTACT}", delay=300)
         return
 
     if await check_user(update, context): return
@@ -1026,7 +1035,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # /start khong co args - tat ca user chi thay chao + /help
     if not args:
         await temp_reply(update, context,
-            f"Chao mung ban den voi he thong.\n\nGo /help de xem danh sach lenh va huong dan su dung.",
+            f"Chào mừng bạn đến với hệ thống.\n\nGõ /help để xem danh sách lệnh và hướng dẫn sử dụng.",
             delay=120)
         return
 
@@ -1045,10 +1054,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if count >= INVALID_BAN:
             await do_ban(app, uid, user.full_name, "Co tinh do link")
             await temp_reply(update, context,
-                f"Quyen truy cap bi thu hoi tu dong.\n\nNeu ban nghi lenh cam do nham lan, lien he: {ADMIN_CONTACT}",
+                f"Quyền truy cập bị thu hồi tự động.\n\nNếu bạn nghĩ lệnh cấm do nhầm lẫn, liên hệ: {ADMIN_CONTACT}",
                 delay=300)
             return
-        await temp_reply(update, context, "Du lieu khong ton tai hoac phien chia se da het han.", delay=120)
+        await temp_reply(update, context, "Dữ liệu không tồn tại hoặc phiên chia sẻ đã hết hạn.", delay=120)
         return
 
     invalid_attempts[uid] = 0
@@ -1060,7 +1069,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await log_warning(app, user, "Truy cap trai phep nhieu lan", count)
             nonmember_attempts[uid] = 0
         await temp_reply(update, context,
-            f"Noi dung chi danh cho thanh vien VIP.\n\nGo /mua de xem huong dan mua VIP.",
+            f"Nội dung chỉ dành cho thành viên VIP.\n\nGõ /mua để xem hướng dẫn mua VIP.",
             delay=300)
         return
 
@@ -1069,7 +1078,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Truy cap noi dung\nID: <code>{uid}</code>\n"
         f"Ten: {sanitize(user.full_name)}\n"
         f"Username: {'@'+user.username if user.username else 'Khong co'}\n"
-        f"Album: <code>{key}</code>\nThoi gian: {now_str()}"
+        f"Album: <code>{key}</code>\nThời gian: {now_str()}"
     )
     # Luu tong luot xem
     users_col = get_users(context)
@@ -1119,17 +1128,17 @@ async def send_demo(app, user_id, number, query=None):
     albums_col = app.bot_data["albums_col"]
     user_doc  = await users_col.find_one({"user_id": user_id})
     if not user_doc:
-        if query: await query.answer("Khong tim thay thong tin cua ban!")
+        if query: await query.answer("Không tìm thấy thông tin của bạn!")
         return
     earned   = user_doc.get("invite_earned",0)
     used     = user_doc.get("invite_used",0)
     luot_con = earned - used
     if luot_con <= 0:
-        if query: await query.answer("Ban khong con luot xem!")
+        if query: await query.answer("Bạn không còn lượt xem!")
         try:
             await app.bot.send_message(
                 chat_id=user_id,
-                text="Ban khong con luot xem.\nDung /gioi_thieu de kiem them luot.",
+                text="Bạn không còn lượt xem.\nDùng /gioi_thieu để kiếm thêm lượt.",
                 protect_content=True
             )
         except Exception: pass
@@ -1147,10 +1156,10 @@ async def send_demo(app, user_id, number, query=None):
         return
     album = await albums_col.find_one({"key": demo["full_album_key"]})
     if not album or not album.get("items"):
-        if query: await query.answer("Khong tim thay noi dung!")
+        if query: await query.answer("Không tìm thấy nội dung!")
         return
     await users_col.update_one({"user_id": user_id}, {"$inc": {"invite_used": 1, "total_views": 1}})
-    if query: await query.answer(f"Dang gui bo #{number}...")
+    if query: await query.answer(f"Đang gửi bộ #{number}...")
 
     items    = album.get("items",[])
     total_sec = sum(it.get("duration",0) for it in items if it["type"]=="video")
@@ -1194,70 +1203,70 @@ async def cmd_mua(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if update.effective_chat.type != "private":
         await temp_reply(update, context,
-            f"Lenh nay chi hoat dong trong chat rieng voi bot.\nBam: @{BOT_USERNAME}", delay=60)
+            f"Lệnh này chỉ hoạt động trong chat riêng với bot.\nBam: @{BOT_USERNAME}", delay=60)
         return
     await save_user(context, user)
     qr_img  = make_qr_img(user.id)
     vietqr  = make_vietqr(user.id)
     await log_mua(context.application, user)
     await temp_reply(update, context,
-        f"Goi VIP 1 thang: {VIP_PRICE:,}d\n\n"
+        f"Gói VIP 1 tháng: {VIP_PRICE:,}d\n\n"
         f"Chuyen khoan:\n"
-        f"Ngan hang: {BANK_NAME}\n"
-        f"So tai khoan: {BANK_ACCOUNT}\n"
-        f"So tien: {VIP_PRICE:,}d\n"
-        f"Noi dung: SEVQR VIP {user.id}\n\n"
+        f"Ngân hàng: {BANK_NAME}\n"
+        f"Số tài khoản: {BANK_ACCOUNT}\n"
+        f"Số tiền: {VIP_PRICE:,}d\n"
+        f"Nội dung: SEVQR VIP {user.id}\n\n"
         f"Anh QR: {qr_img}\n\n"
         f"Hoac bam link de quet QR: {vietqr}\n\n"
-        f"He thong tu dong cap quyen sau khi nhan thanh toan.\n"
-        f"Ho tro: {ADMIN_CONTACT}", delay=600
+        f"Hệ thống tự động cấp quyền sau khi nhận thanh toán.\n"
+        f"Hỗ trợ: {ADMIN_CONTACT}", delay=600
     )
 
 async def cmd_luot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if update.effective_chat.type != "private":
         await temp_reply(update, context,
-            f"Lenh nay chi hoat dong trong chat rieng voi bot.\nBam: @{BOT_USERNAME}", delay=60)
+            f"Lệnh này chỉ hoạt động trong chat riêng với bot.\nBam: @{BOT_USERNAME}", delay=60)
         return
     users_col = get_users(context)
     doc = await users_col.find_one({"user_id": user.id})
     if not doc:
         await temp_reply(update, context,
-            "Ban chua co thong tin trong he thong.\nVao nhom va xac nhan noi quy truoc.", delay=120)
+            "Bạn chưa có thông tin trong hệ thống.\nVào nhóm và xác nhận nội quy trước.", delay=120)
         return
     earned   = doc.get("invite_earned",0)
     used     = doc.get("invite_used",0)
     luot_con = earned - used
     await temp_reply(update, context,
-        f"Luot xem cua ban:\n\n"
-        f"Da kiem: {earned}/15\n"
-        f"Da dung: {used}\n"
-        f"Con lai: {luot_con}\n\n"
-        f"Dung /gioi_thieu de kiem them luot.\n"
-        f"Dung /xem de xem noi dung demo.", delay=120
+        f"Lượt xem của bạn:\n\n"
+        f"Đã kiếm: {earned}/15\n"
+        f"Đã dùng: {used}\n"
+        f"Còn lại: {luot_con}\n\n"
+        f"Dùng /gioi_thieu để kiếm thêm lượt.\n"
+        f"Dùng /xem để xem nội dung demo.", delay=120
     )
 
 async def cmd_gioi_thieu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if update.effective_chat.type != "private":
         await temp_reply(update, context,
-            f"Lenh nay chi hoat dong trong chat rieng voi bot.\nBam: @{BOT_USERNAME}", delay=60)
+            f"Lệnh này chỉ hoạt động trong chat riêng với bot.\nBam: @{BOT_USERNAME}", delay=60)
         return
     ref_url = make_ref_link(user.id)
     await temp_reply(update, context,
-        f"Link gioi thieu cua ban:\n{ref_url}\n\n"
-        f"Chia se link nay de kiem luot xem.\n"
-        f"Moi nguoi vao nhom va o lai 24 gio = +1 luot.\n\n"
-        f"Toi da 15 luot suot doi. Du moi bao nhieu nguoi\n"
-        f"cung chi kiem duoc toi da 15 luot.\n"
-        f"Dung /luot de xem so luot hien tai.", delay=300
+        f"Link giới thiệu của bạn:\n{ref_url}\n\n"
+        f"Chia sẻ link này để kiếm lượt xem.\n"
+        f"Mỗi người vào nhóm và ở lại 24 giờ = +1 lượt.\n\n"
+        f"Tối đa 15 lượt suốt đời. Dù mời bao nhiêu người\n"
+        f"cũng chỉ kiếm được tối đa 15 lượt.\n"
+        f"Dùng /luot để xem số lượt hiện tại.", delay=300
     )
 
 async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if update.effective_chat.type != "private":
         await temp_reply(update, context,
-            f"Lenh nay chi hoat dong trong chat rieng voi bot.\nBam: @{BOT_USERNAME}", delay=60)
+            f"Lệnh này chỉ hoạt động trong chat riêng với bot.\nBam: @{BOT_USERNAME}", delay=60)
         return
     args = context.args or []
     demos_col = get_demos(context)
@@ -1277,21 +1286,21 @@ async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_col = get_users(context)
     doc = await users_col.find_one({"user_id": user.id})
     if not doc:
-        await temp_reply(update, context, "Ban chua co thong tin trong he thong.", delay=120)
+        await temp_reply(update, context, "Bạn chưa có thông tin trong hệ thống.", delay=120)
         return
     earned   = doc.get("invite_earned",0)
     used     = doc.get("invite_used",0)
     luot_con = earned - used
     if luot_con <= 0:
         await temp_reply(update, context,
-            "Ban khong con luot xem.\nDung /gioi_thieu de kiem them luot.", delay=120)
+            "Bạn không còn lượt xem.\nDùng /gioi_thieu để kiếm thêm lượt.", delay=120)
         return
     demos = await demos_col.find(
         {"full_album_key": {"$exists": True, "$ne": None}},
         {"number": 1}
     ).sort("number",1).to_list(length=20)
     if not demos:
-        await temp_reply(update, context, "Hien chua co bo demo nao.", delay=120)
+        await temp_reply(update, context, "Hiện chưa có bộ demo nào.", delay=120)
         return
     keyboard = []
     for d in demos:
@@ -1331,7 +1340,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fwd   = update.message.forward_from
         uname = f"@{fwd.username}" if fwd.username else "Khong co"
         await update.message.reply_text(
-            f"Thong tin:\nID: <code>{fwd.id}</code>\n"
+            f"Thông tin:\nID: <code>{fwd.id}</code>\n"
             f"Ten: {fwd.full_name}\nUsername: {uname}", parse_mode="HTML")
         return
 
@@ -1361,7 +1370,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.message.reply_text(
                 f"Da ghi nhan bo #{number}.\n"
-                f"Dung /setlink {number} [KEY] de lien ket album full."
+                f"Dùng /setlink {number} [KEY] để liên kết album full."
             )
         return
 
@@ -1385,7 +1394,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     album = await albums_col.find_one({"key": key}, {"items": 1})
     count = len(album.get("items",[])) if album else 0
-    await update.message.reply_text(f"Da nhan {file_type} — album co {count} file.\nGo /done khi xong.")
+    await update.message.reply_text(f"Đã nhận {file_type} — album có {count} file.\nGõ /done khi xong.")
 
 # Handler nhan ForceReply thoi gian ban
 async def handle_text_hashtag(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1406,7 +1415,7 @@ async def handle_text_hashtag(update: Update, context: ContextTypes.DEFAULT_TYPE
                           "created_at": datetime.now(timezone.utc)}},
         upsert=True
     )
-    await update.message.reply_text("Da ghi nhan bo #" + str(number) + ".\nDung /setlink " + str(number) + " [KEY] de lien ket album full.")
+    await update.message.reply_text("Da ghi nhan bo #" + str(number) + ".\nDùng /setlink " + str(number) + " [KEY] để liên kết album full.")
 
 
 
@@ -1430,7 +1439,7 @@ async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     target_id  = ban_info["target_id"]
     reason     = ban_info["reason"]
-    target_name = ban_info.get("target_name","Khong ro")
+    target_name = ban_info.get("target_name","Không rõ")
     awaiting_ban_time.pop(ADMIN_ID, None)
     pending_bans.pop(ADMIN_ID, None)
 
@@ -1448,8 +1457,8 @@ async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
             unit_o   = "gio" if raw_secs < 86400 else "ngay"
             unit_c   = "gio" if clamped < 86400 else "ngay"
             await update.message.reply_text(
-                f"Thoi gian nhap ({d_orig} {unit_o}) vuot gioi han an toan.\n"
-                f"Da tu dong dieu chinh thanh {d_clamp} {unit_c}."
+                f"Thời gian nhập ({d_orig} {unit_o}) vượt giới hạn an toàn.\n"
+                f"Đã tự động điều chỉnh thành {d_clamp} {unit_c}."
             )
         until_ts = int(datetime.now(timezone.utc).timestamp() + clamped)
         try:
@@ -1457,26 +1466,26 @@ async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=_gid, user_id=target_id, until_date=until_ts
             )
         except Exception as e:
-            await update.message.reply_text(f"Khong the kick khoi nhom: {e}")
+            await update.message.reply_text(f"Không thể kick khỏi nhóm: {e}")
             return
 
     await do_ban(context.application, target_id, target_name,
                  reason, ban_type="Thu cong", duration=dur)
 
     ea          = datetime.now(timezone(timedelta(hours=7))) + dur
-    expire_text = f"Het han luc: {ea.strftime('%d/%m/%Y %H:%M')}"
+    expire_text = f"Hết hạn lúc: {ea.strftime('%d/%m/%Y %H:%M')}"
     try:
         await context.bot.send_message(
             chat_id=target_id,
-            text=(f"Ban da bi cam.\nLy do: {reason}\n{expire_text}\n\n"
-                  f"Neu ban nghi lenh cam do nham lan, lien he: {ADMIN_CONTACT}"),
+            text=(f"Bạn đã bị cấm.\nLý do: {reason}\n{expire_text}\n\n"
+                  f"Nếu bạn nghĩ lệnh cấm do nhầm lẫn, liên hệ: {ADMIN_CONTACT}"),
             protect_content=True
         )
     except Exception: pass
 
     d = int(dur.total_seconds()//86400); h = int(dur.total_seconds()//3600)
     expire_info = f"({d} ngay)" if d >= 1 else f"({h} gio)" if h >= 1 else f"({int(dur.total_seconds()//60)} phut)"
-    await update.message.reply_text(f"Da cam {target_name} {expire_info}.\nLy do: {reason}")
+    await update.message.reply_text(f"Đã cấm {target_name} {expire_info}.\nLý do: {reason}")
 
 # ==================== ADMIN COMMANDS ====================
 ADMIN_ONLY_CMDS = {"new","new_album","done","list","detail","check","del","del_album","clean",
@@ -1492,7 +1501,7 @@ async def admin_cmd_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE)
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"Lenh /{cmd} chi hoat dong trong chat rieng voi bot.\nVui long chat rieng voi bot de su dung."
+                text=f"Lệnh /{cmd} chỉ hoạt động trong chat riêng với bot.\nVui lòng chat riêng với bot để sử dụng."
             )
         except Exception: pass
 
@@ -1501,13 +1510,13 @@ async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         await admin_cmd_in_group(update, context); return
     if context.user_data.get("current_key"):
-        await update.message.reply_text("Dang co album chua hoan thanh.\nGo /done de lay link truoc."); return
+        await update.message.reply_text("Đang có album chưa hoàn thành.\nGõ /done để lấy link trước."); return
     key = make_key()
     albums_col = get_albums(context)
     await albums_col.insert_one({"key": key, "items": [], "created_at": datetime.now(timezone.utc)})
     context.user_data["current_key"] = key
     await update.message.reply_text(
-        f"Album moi da tao.\nMa: <code>{key}</code>\n\nForward anh hoac video vao day.\nGo /done khi xong.",
+        f"Album mới đã tạo.\nMa: <code>{key}</code>\n\nForward ảnh hoặc video vào đây.\nGõ /done khi xong.",
         parse_mode="HTML")
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1516,14 +1525,14 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_cmd_in_group(update, context); return
     key = context.user_data.get("current_key")
     if not key:
-        await update.message.reply_text("Khong co album nao dang tao."); return
+        await update.message.reply_text("Không có album nào đang tạo."); return
     albums_col = get_albums(context)
     album      = await albums_col.find_one({"key": key})
     if not album or not album.get("items"):
-        await update.message.reply_text("Album chua co file nao.\nHay forward anh hoac video vao truoc."); return
+        await update.message.reply_text("Album chưa có file nào.\nHãy forward ảnh hoặc video vào trước."); return
     context.user_data.pop("current_key", None)
     count = len(album.get("items",[]))
-    await update.message.reply_text(f"Hoan tat. Album co {count} file.\nKey: <code>{key}</code>\nLink chia se:", parse_mode="HTML")
+    await update.message.reply_text(f"Hoàn tất. Album có {count} file.\nKey: <code>{key}</code>\nLink chia se:", parse_mode="HTML")
     await update.message.reply_text(make_link(key))
 
 async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1533,9 +1542,9 @@ async def list_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     albums_col = get_albums(context)
     try:
         albums = await db_retry(lambda: albums_col.find({},{"key":1,"items":1}).sort("created_at",-1).to_list(length=50))
-    except: await update.message.reply_text("Loi ket noi."); return
+    except: await update.message.reply_text("Lỗi kết nối."); return
     if not albums: await update.message.reply_text("Chua co album nao."); return
-    text = f"Danh sach album ({len(albums)}):\n\n"
+    text = f"Danh sách album ({len(albums)}):\n\n"
     for i, a in enumerate(albums, 1):
         text += f"{i}. <code>{a['key']}</code> — {len(a.get('items',[]))} file\n"
     await update.message.reply_text(text, parse_mode="HTML")
@@ -1547,10 +1556,10 @@ async def detail_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     albums_col = get_albums(context)
     try:
         albums = await db_retry(lambda: albums_col.find({},{"key":1,"items":1}).sort("created_at",-1).to_list(length=50))
-    except: await update.message.reply_text("Loi ket noi."); return
+    except: await update.message.reply_text("Lỗi kết nối."); return
     if not albums: await update.message.reply_text("Chua co album nao."); return
     for i, a in enumerate(albums, 1):
-        await update.message.reply_text(f"{i}\nSo file: {len(a.get('items',[]))}\nLink:")
+        await update.message.reply_text(f"{i}\nSố file: {len(a.get('items',[]))}\nLink:")
         await update.message.reply_text(make_link(a["key"]))
         await asyncio.sleep(0.3)
 
@@ -1562,14 +1571,14 @@ async def check_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key        = context.args[0]
     albums_col = get_albums(context)
     album      = await albums_col.find_one({"key": key})
-    if not album: await update.message.reply_text(f"Khong tim thay album {key}."); return
+    if not album: await update.message.reply_text(f"Không tìm thấy album {key}."); return
     items  = album.get("items",[])
     videos = sum(1 for i in items if i["type"]=="video")
     photos = sum(1 for i in items if i["type"]=="photo")
     total_dur = sum(it.get("duration",0) for it in items if it["type"]=="video")
     await update.message.reply_text(
         f"Album: <code>{key}</code>\n"
-        f"Tong: {len(items)} | Video: {videos} | Anh: {photos}\n"
+        f"Tổng: {len(items)} | Video: {videos} | Anh: {photos}\n"
         f"Tong thoi luong video: {total_dur//60} phut\nLink:", parse_mode="HTML")
     await update.message.reply_text(make_link(key))
 
@@ -1581,7 +1590,7 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = context.args[0]
     r   = await get_albums(context).delete_one({"key": key})
     await get_jobs(context).delete_many({"album_key": key})
-    await update.message.reply_text(f"Da xoa album {key}." if r.deleted_count else f"Khong tim thay {key}.")
+    await update.message.reply_text(f"Đã xóa album {key}." if r.deleted_count else f"Không tìm thấy {key}.")
 
 async def clean_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -1589,21 +1598,21 @@ async def clean_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_cmd_in_group(update, context); return
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     r = await get_albums(context).delete_many({"$or":[{"items":[]},{"created_at":{"$lt":cutoff}}]})
-    await update.message.reply_text(f"Da xoa {r.deleted_count} album trong hoac cu hon 7 ngay.")
+    await update.message.reply_text(f"Đã xóa {r.deleted_count} album trống hoặc cũ hơn 7 ngày.")
 
 async def cmd_setlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     if update.effective_chat.type != "private":
         await admin_cmd_in_group(update, context); return
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text("Dung: /setlink <so> <key_album>\nVi du: /setlink 1 abc123xyz"); return
+        await update.message.reply_text("Dùng: /setlink <số> <key_album>\nVi du: /setlink 1 abc123xyz"); return
     try: number = int(context.args[0])
-    except: await update.message.reply_text("So bo phai la so nguyen."); return
+    except: await update.message.reply_text("Số bộ phải là số nguyên."); return
     key        = context.args[1]
     albums_col = get_albums(context)
     album      = await albums_col.find_one({"key": key})
     if not album:
-        await update.message.reply_text(f"Khong tim thay album voi key: {key}\nKiem tra lai bang /list."); return
+        await update.message.reply_text(f"Không tìm thấy album voi key: {key}\nKiểm tra lại bằng /list."); return
     demos_col = get_demos(context)
     await demos_col.update_one(
         {"number": number},
@@ -1613,9 +1622,9 @@ async def cmd_setlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     items = album.get("items",[])
     await update.message.reply_text(
-        f"Da lien ket bo #{number} voi album {key}.\n"
-        f"So file: {len(items)}\n"
-        f"Thanh vien co the dung /xem {number} de xem."
+        f"Da lien ket bo #{number} với album {key}.\n"
+        f"Số file: {len(items)}\n"
+        f"Thành viên có thể dùng /xem {number} để xem."
     )
 
 async def cmd_dellink(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1623,17 +1632,17 @@ async def cmd_dellink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         await admin_cmd_in_group(update, context); return
     if not context.args:
-        await update.message.reply_text("Dung: /dellink <so>\nVi du: /dellink 1"); return
+        await update.message.reply_text("Dùng: /dellink <số>\nVi du: /dellink 1"); return
     try: number = int(context.args[0])
-    except: await update.message.reply_text("So bo phai la so nguyen."); return
+    except: await update.message.reply_text("Số bộ phải là số nguyên."); return
     demos_col = get_demos(context)
     r = await demos_col.update_one({"number": number}, {"$set": {"full_album_key": None}})
     if r.matched_count:
         await update.message.reply_text(
-            f"Da xoa lien ket album full cua bo #{number}.\n"
-            f"Thanh vien goc /xem {number} se thay thong bao 'Khong kha dung'.")
+            f"Đã xóa lien ket album full cua bo #{number}.\n"
+            f"Thành viên gõ /xem {number} sẽ thấy thông báo 'Không khả dụng'.")
     else:
-        await update.message.reply_text(f"Khong tim thay bo #{number}.")
+        await update.message.reply_text(f"Không tìm thấy bo #{number}.")
 
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -1644,8 +1653,8 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text="Lenh /ban chi hoat dong trong chat rieng voi bot (DM).\n"
-                     "Vui long mo chat rieng voi bot de su dung."
+                text="Lệnh /ban chỉ hoạt động trong chat riêng với bot (DM).\n"
+                     "Vui lòng mở chat riêng với bot để sử dụng."
             )
         except Exception: pass
         return
@@ -1653,15 +1662,15 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
     if not args and not update.message.reply_to_message:
         await update.message.reply_text(
-            "Cach dung /ban trong DM:\n\n"
+            "Cách dùng /ban trong DM:\n\n"
             "1. /ban [ID] [Ly do]\n"
             "2. /ban @tentaikhoan [Ly do]\n\n"
             "Vi du: /ban 123456789 quay-roi\n"
             "Vi du: /ban @abc spam\n\n"
-            "Bot se hoi them thoi gian cam sau."
+            "Bot sẽ hỏi thêm thời gian cấm sau."
         ); return
 
-    target_id = None; target_name = "Khong ro"; reason = "Vi pham quy dinh"
+    target_id = None; target_name = "Không rõ"; reason = "Vi pham quy dinh"
 
     if update.message.reply_to_message:
         u = update.message.reply_to_message.from_user
@@ -1673,10 +1682,10 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 chat = await context.bot.get_chat(first)
                 target_id, target_name = chat.id, chat.full_name
-            except Exception: await update.message.reply_text(f"Khong tim thay: {first}"); return
+            except Exception: await update.message.reply_text(f"Không tìm thấy: {first}"); return
         else:
             try: target_id = int(first)
-            except: await update.message.reply_text("ID khong hop le."); return
+            except: await update.message.reply_text("ID không hợp lệ."); return
             try:
                 chat = await context.bot.get_chat(target_id)
                 target_name = chat.full_name
@@ -1684,28 +1693,28 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(args) > 1: reason = " ".join(args[1:])
 
     if not target_id or target_id == ADMIN_ID:
-        await update.message.reply_text("Khong the ban."); return
+        await update.message.reply_text("Không thể ban."); return
 
     reason = LY_DO.get(reason, reason)
     banned_col = get_banned(context)
     existing   = await banned_col.find_one({"user_id": target_id})
     if existing:
         await update.message.reply_text(
-            f"Tai khoan {target_name} da bi cam truoc do.\n"
-            f"Ly do cu: {existing.get('reason','Khong ro')}\n"
-            f"Dung /unban truoc neu muon cam lai."
+            f"Tài khoản {target_name} đã bị cấm trước đó.\n"
+            f"Lý do cũ: {existing.get('reason','Không rõ')}\n"
+            f"Dùng /unban trước nếu muốn cấm lại."
         ); return
 
     pending_bans[ADMIN_ID] = {"target_id": target_id, "target_name": target_name, "reason": reason}
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Nhap thoi gian", callback_data=f"ban_enter_time_{ADMIN_ID}")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Nhập thời gian", callback_data=f"ban_enter_time_{ADMIN_ID}")]])
     await update.message.reply_text(
-        f"Chuan bi cam:\nID: {target_id}\nTen: {target_name}\nLy do: {reason}\n\nBam nut de nhap thoi gian cam:",
+        f"Chuẩn bị cấm:\nID: {target_id}\nTen: {target_name}\nLý do: {reason}\n\nBấm nút để nhập thời gian cấm:",
         reply_markup=kb
     )
 
 async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    target_id = None; target_name = "Khong ro"
+    target_id = None; target_name = "Không rõ"
     args = context.args or []
     if update.message.reply_to_message:
         u = update.message.reply_to_message.from_user
@@ -1716,17 +1725,17 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 chat = await context.bot.get_chat(first)
                 target_id, target_name = chat.id, chat.full_name
-            except Exception: await update.message.reply_text("Khong tim thay username."); return
+            except Exception: await update.message.reply_text("Không tìm thấy username."); return
         else:
             try: target_id = int(first)
-            except: await update.message.reply_text("ID khong hop le."); return
+            except: await update.message.reply_text("ID không hợp lệ."); return
             try:
                 chat = await context.bot.get_chat(target_id)
                 target_name = chat.full_name
             except Exception: pass
     else:
         await update.message.reply_text(
-            "Cach dung /unban:\n1. Reply tin nhan + /unban\n2. /unban @user\n3. /unban ID"
+            "Cách dùng /unban:\n1. Reply tin nhan + /unban\n2. /unban @user\n3. /unban ID"
         ); return
     banned_col = get_banned(context)
     r = await banned_col.delete_one({"user_id": target_id})
@@ -1743,10 +1752,10 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 protect_content=True
             )
         except Exception: pass
-        await update.message.reply_text(f"Da go cam {target_name}.")
+        await update.message.reply_text(f"Đã gỡ cấm {target_name}.")
         await log_unban(context.application, target_id)
     else:
-        await update.message.reply_text("Khong tim thay trong danh sach cam.")
+        await update.message.reply_text("Không tìm thấy trong danh sách cấm.")
 
 async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -1755,9 +1764,9 @@ async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = update.message.reply_to_message.from_user.id
     elif context.args:
         try: target_id = int(context.args[0])
-        except: await update.message.reply_text("ID khong hop le."); return
+        except: await update.message.reply_text("ID không hợp lệ."); return
     else:
-        await update.message.reply_text("Dung: /who <ID> hoac reply tin nhan"); return
+        await update.message.reply_text("Dùng: /who <ID> hoặc reply tin nhắn"); return
     ban_doc  = await get_banned(context).find_one({"user_id": target_id})
     vip_doc  = await get_vip(context).find_one({"user_id": target_id})
     user_doc = await get_users(context).find_one({"user_id": target_id})
@@ -1766,14 +1775,14 @@ async def who_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name     = chat.full_name
         username = f"@{chat.username}" if chat.username else "Khong co"
     except Exception:
-        name = user_doc.get("full_name","Khong ro") if user_doc else "Khong ro"
+        name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
         username = f"@{user_doc.get('username')}" if user_doc and user_doc.get("username") else "Khong co"
-    text = f"Thong tin:\nID: <code>{target_id}</code>\nTen: {name}\nUsername: {username}\n\n"
+    text = f"Thông tin:\nID: <code>{target_id}</code>\nTen: {name}\nUsername: {username}\n\n"
     if ban_doc:
         es    = ban_doc['expire_at'].strftime('%d/%m/%Y %H:%M') if ban_doc.get('expire_at') else "Vinh vien"
-        text += f"Trang thai ban: Dang bi cam\nLy do: {ban_doc.get('reason','')}\nHet han: {es}\n\n"
+        text += f"Trạng thái ban: Đang bị cấm\nLý do: {ban_doc.get('reason','')}\nHết hạn: {es}\n\n"
     else:
-        text += "Trang thai ban: Binh thuong\n\n"
+        text += "Trạng thái ban: Bình thường\n\n"
     if vip_doc and vip_doc.get("expire_at"):
         ea = vip_doc["expire_at"]
         if ea.tzinfo is None: ea = ea.replace(tzinfo=timezone.utc)
@@ -1798,7 +1807,7 @@ async def extend_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_cmd_in_group(update, context); return
     if not context.args: await update.message.reply_text("Dung: /extend <ID>"); return
     try: target_id = int(context.args[0])
-    except: await update.message.reply_text("ID khong hop le."); return
+    except: await update.message.reply_text("ID không hợp lệ."); return
     vip_col   = get_vip(context)
     users_col = get_users(context)
     now       = datetime.now(timezone.utc)
@@ -1818,19 +1827,19 @@ async def extend_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         upsert=True
     )
     user_doc  = await users_col.find_one({"user_id": target_id})
-    user_name = user_doc.get("full_name","Khong ro") if user_doc else "Khong ro"
+    user_name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
     try:
         await context.bot.send_message(
             chat_id=target_id,
-            text=(f"Goi VIP da duoc gia han thanh cong.\n\n"
-                  f"Han moi: {new_expire.strftime('%d/%m/%Y')}\n"
-                  f"So ngay con lai: {d} ngay"),
+            text=(f"Gói VIP đã được gia hạn thành công.\n\n"
+                  f"Hạn mới: {new_expire.strftime('%d/%m/%Y')}\n"
+                  f"So ngày còn lại: {d} ngay"),
             protect_content=True
         )
     except Exception: pass
     await update.message.reply_text(
-        f"Da gia han VIP cho <code>{target_id}</code> ({user_name}).\n"
-        f"Han moi: {new_expire.strftime('%d/%m/%Y')} ({d} ngay con lai)",
+        f"Đã gia hạn VIP cho <code>{target_id}</code> ({user_name}).\n"
+        f"Hạn mới: {new_expire.strftime('%d/%m/%Y')} ({d} ngày còn lại)",
         parse_mode="HTML"
     )
     await log_extend(context.application, target_id, 30, new_expire)
@@ -1839,8 +1848,8 @@ async def vip_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     vip_col = get_vip(context)
     members = await vip_col.find({"active":True},{"user_id":1,"full_name":1,"expire_at":1}).sort("expire_at",1).to_list(50)
-    if not members: await update.message.reply_text("Chua co member VIP nao."); return
-    text = f"VIP dang hoat dong ({len(members)}):\n\n"
+    if not members: await update.message.reply_text("Chưa có member VIP nào."); return
+    text = f"VIP đang hoạt động ({len(members)}):\n\n"
     for i, m in enumerate(members, 1):
         ea   = m.get("expire_at")
         d    = days_left(ea) if ea else 0
@@ -1859,20 +1868,20 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         td = await get_demos(context).count_documents({})
         tl = await get_demos(context).count_documents({"full_album_key":{"$ne":None}})
         await update.message.reply_text(
-            f"Trang thai he thong:\n\n"
-            f"Album: {ta}\nDemo: {td} bo (da lien ket: {tl})\n"
+            f"Trạng thái hệ thống:\n\n"
+            f"Album: {ta}\nDemo: {td} bộ (đã liên kết: {tl})\n"
             f"User: {tu}\nVIP: {tv}\n"
-            f"Cam: {tb} (tam: {tt})\nJob cho xoa: {tj}\n"
-            f"Database: Ket noi on dinh"
+            f"Cấm: {tb} (tạm: {tt})\nJob chờ xóa: {tj}\n"
+            f"Database: Kết nối ổn định"
         )
-    except Exception: await update.message.reply_text("Loi ket noi.")
+    except Exception: await update.message.reply_text("Lỗi kết nối.")
 
 async def cmd_add_luot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     if not context.args or len(context.args) < 2:
         await update.message.reply_text("Dung: /addluot <ID> <so luot>"); return
     try: target_id = int(context.args[0]); so_luot = int(context.args[1])
-    except: await update.message.reply_text("ID va so luot phai la so."); return
+    except: await update.message.reply_text("ID và số lượt phải là số."); return
     users_col = get_users(context)
     await users_col.update_one({"user_id": target_id}, {"$inc": {"invite_earned": so_luot}}, upsert=True)
     doc    = await users_col.find_one({"user_id": target_id})
@@ -1881,12 +1890,12 @@ async def cmd_add_luot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             chat_id=target_id,
-            text=f"Admin da them {so_luot} luot xem cho ban.\nLuot con lai: {earned-used}/15",
+            text=f"Admin đã thêm {so_luot} lượt xem cho bạn.\nLượt còn lại: {earned-used}/15",
             protect_content=True
         )
     except Exception: pass
     await update.message.reply_text(
-        f"Da them {so_luot} luot cho ID {target_id}.\nTong: {earned} | Da dung: {used} | Con lai: {earned-used}"
+        f"Đã thêm {so_luot} lượt cho ID {target_id}.\nTổng: {earned} | Đã dùng: {used} | Còn lại: {earned-used}"
     )
 
 async def cmd_mock_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1903,51 +1912,51 @@ async def cmd_mock_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: await update.message.reply_text("ID va so tien phai la so."); return
     content = context.args[2] if len(context.args) > 2 else f"SEVQR VIP {target_id}"
     if "SEVQR" not in content.upper(): content = f"SEVQR VIP {target_id}"
-    await update.message.reply_text(f"Dang xu ly thanh toan gia lap: {amount:,}d cho ID {target_id}...")
+    await update.message.reply_text(f"Đang xử lý thanh toán giả lập: {amount:,}d cho ID {target_id}...")
     await process_payment(context.application, target_id, amount, ref="MOCK", content=content)
-    await update.message.reply_text("Xu ly xong. Kiem tra log va DM cua user de xac nhan.")
+    await update.message.reply_text("Xử lý xong. Kiem tra log va DM cua user de xac nhan.")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     await update.message.reply_text(
-        "Lenh danh cho Admin (chi hoat dong trong DM voi bot):\n\n"
-        "— NOI DUNG —\n"
-        "/new — Tao album moi\n"
-        "/done — Lay link chia se\n"
-        "/list — Danh sach album\n"
-        "/detail — Album kem link\n"
+        "Lệnh dành cho Admin (chỉ hoạt động trong DM với bot):\n\n"
+        "— NỘI DUNG —\n"
+        "/new — Tạo album mới\n"
+        "/done — Lấy link chia sẻ\n"
+        "/list — Danh sách album\n"
+        "/detail — Album kèm link\n"
         "/check <ma> — Thong tin album\n"
-        "/del <ma> — Xoa album\n"
-        "/clean — Xoa album cu hon 7 ngay\n\n"
+        "/del <ma> — Xóa album\n"
+        "/clean — Xóa album cu hon 7 ngay\n\n"
         "— DEMO SYSTEM —\n"
-        "/setlink <so> <key> — Lien ket bo demo voi album full\n"
+        "/setlink <so> <key> — Liên kết bộ demo với album full\n"
         "  Vi du: /setlink 1 abc123xyz\n"
-        "/dellink <so> — Xoa lien ket album full cua bo\n"
+        "/dellink <so> — Xóa liên kết album full của bộ\n"
         "  Vi du: /dellink 1\n\n"
-        "— THANH VIEN —\n"
-        "/ban [ID/@user] [Ly do] — Cam 2 pha (hoi them thoi gian)\n"
-        "  Thoi gian: 1h / 2d / 30m (h=gio, d=ngay, m=phut)\n"
-        "  Ly do goi y: quay-roi / chia-se / spam / gia-mao\n"
+        "— THÀNH VIÊN —\n"
+        "/ban [ID/@user] [Ly do] — Cấm 2 pha (hỏi thêm thời gian)\n"
+        "  Thời gian: 1h / 2d / 30m (h=gio, d=ngay, m=phut)\n"
+        "  Lý do gợi ý: quay-roi / chia-se / spam / gia-mao\n"
         "  het-han / ban-lai / vi-pham / abuse / da-nghi\n"
         "  nhieu-tk / hoan-tien\n"
-        "/unban [ID/@user] — Go cam\n"
-        "/who <ID> — Xem thong tin tai khoan\n"
-        "/addluot <ID> <so> — Them luot xem cho thanh vien\n\n"
+        "/unban [ID/@user] — Gỡ cấm\n"
+        "/who <ID> — Xem thông tin tài khoản\n"
+        "/addluot <ID> <so> — Thêm lượt xem cho thành viên\n\n"
         "— VIP —\n"
-        "/viplist — Danh sach VIP dang hoat dong\n"
-        "/extend <ID> — Gia han VIP them 1 thang\n\n"
-        "— TEST & HE THONG —\n"
-        "/mock_pay <ID> <so_tien> — Gia lap thanh toan de test\n"
-        "/status — Tong quan trang thai\n"
-        "/help — Danh sach lenh nay"
+        "/viplist — Danh sach VIP đang hoạt động\n"
+        "/extend <ID> — Gia hạn VIP thêm 1 tháng\n\n"
+        "— TEST & HỆ THỐNG —\n"
+        "/mock_pay <ID> <so_tien> — Giả lập thanh toán để test\n"
+        "/status — Tổng quan trạng thái\n"
+        "/help — Danh sách lệnh này"
     )
 
 async def no_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ("group","supergroup"):
         await temp_reply(update, context,
-            f"Lenh nay chi hoat dong trong chat rieng voi bot.\nBam: @{BOT_USERNAME}", delay=60)
+            f"Lệnh này chỉ hoạt động trong chat riêng với bot.\nBam: @{BOT_USERNAME}", delay=60)
     else:
-        await temp_reply(update, context, "Ban khong co quyen su dung lenh nay.", delay=60)
+        await temp_reply(update, context, "Bạn không có quyền sử dụng lệnh này.", delay=60)
 
 # ==================== SETUP DB ====================
 async def setup_db(app):
@@ -2071,13 +2080,26 @@ async def main():
     # Non-admin lenh
     app.add_handler(MessageHandler(filters.COMMAND & ~admin_filter, no_permission))
 
-    # Global error handler - bat moi exception bi swallow
+    # Global error handler - log traceback day du
     async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-        logging.error(f"Global error: {context.error}", exc_info=context.error)
-        if isinstance(update, Update) and update.effective_message:
+        import traceback as _tb
+        tb_str = "".join(_tb.format_exception(
+            None, context.error, context.error.__traceback__
+        ))
+        # Log ra Render
+        logging.error(f"=== UNHANDLED EXCEPTION ===\n{tb_str}")
+
+        # Gui vao nhom log admin
+        if LOG_GROUP_ID:
             try:
-                await update.effective_message.reply_text(
-                    "He thong gap loi. Vui long thu lai sau."
+                await app.bot.send_message(
+                    chat_id=LOG_GROUP_ID,
+                    text=(f"Lỗi hệ thống\n"
+                          f"<code>{sanitize(str(context.error))}</code>\n\n"
+                          f"Chi tiết:\n"
+                          f"<code>{sanitize(tb_str, max_len=3000)}</code>\n"
+                          f"Thời gian: {now_str()}"),
+                    parse_mode="HTML"
                 )
             except Exception: pass
     app.add_error_handler(global_error_handler)
