@@ -1203,24 +1203,42 @@ async def cmd_mua(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if update.effective_chat.type != "private":
         await temp_reply(update, context,
-            f"Lệnh này chỉ hoạt động trong chat riêng với bot.\nBam: @{BOT_USERNAME}", delay=60)
+            f"Lệnh này chỉ hoạt động trong chat riêng với bot.\nBấm: @{BOT_USERNAME}", delay=60)
         return
     await save_user(context, user)
-    qr_img  = make_qr_img(user.id)
-    vietqr  = make_vietqr(user.id)
     await log_mua(context.application, user)
-    await temp_reply(update, context,
-        f"Gói VIP 1 tháng: {VIP_PRICE:,}d\n\n"
-        f"Chuyen khoan:\n"
+
+    qr_img_url = make_qr_img(user.id)
+    kb_qr = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Xem mã QR thanh toán", url=qr_img_url)
+    ]])
+    caption = (
+        f"Gói VIP 1 tháng: {VIP_PRICE:,}đ\n\n"
+        f"Chuyển khoản:\n"
         f"Ngân hàng: {BANK_NAME}\n"
         f"Số tài khoản: {BANK_ACCOUNT}\n"
-        f"Số tiền: {VIP_PRICE:,}d\n"
+        f"Số tiền: {VIP_PRICE:,}đ\n"
         f"Nội dung: SEVQR VIP {user.id}\n\n"
-        f"Anh QR: {qr_img}\n\n"
-        f"Hoac bam link de quet QR: {vietqr}\n\n"
-        f"Hệ thống tự động cấp quyền sau khi nhận thanh toán.\n"
-        f"Hỗ trợ: {ADMIN_CONTACT}", delay=600
+        f"Nhấn giữ vào ảnh QR để lưu về máy.\n"
+        f"Sau đó mở app ngân hàng → Quét QR → chọn ảnh vừa lưu.\n\n"
+        f"Hệ thống tự động cấp quyền sau khi nhận đủ tiền.\n"
+        f"Hỗ trợ: {ADMIN_CONTACT}"
     )
+    try:
+        msg = await context.bot.send_photo(
+            chat_id=user.id,
+            photo=qr_img_url,
+            caption=caption,
+            reply_markup=kb_qr,
+            protect_content=True
+        )
+        asyncio.create_task(auto_del(context.bot, user.id, msg.message_id, 600))
+    except Exception as e:
+        logging.error(f"Gui /mua loi: {e}")
+        msg = await update.message.reply_text(
+            caption, reply_markup=kb_qr, protect_content=True
+        )
+        asyncio.create_task(auto_del(context.bot, update.effective_chat.id, msg.message_id, 600))
 
 async def cmd_luot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -2140,3 +2158,4 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Bot crashed: {e} - restart sau 10s...")
             time.sleep(10)
+
