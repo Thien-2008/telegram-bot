@@ -1615,13 +1615,6 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await get_jobs(context).delete_many({"album_key": key})
     await update.message.reply_text(f"Đã xóa album {key}." if r.deleted_count else f"Không tìm thấy {key}.")
 
-async def clean_albums(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if update.effective_chat.type != "private":
-        await admin_cmd_in_group(update, context); return
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    r = await get_albums(context).delete_many({"$or":[{"items":[]},{"created_at":{"$lt":cutoff}}]})
-    await update.message.reply_text(f"Đã xóa {r.deleted_count} album trống hoặc cũ hơn 7 ngày.")
 
 async def cmd_setlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -1921,23 +1914,6 @@ async def cmd_add_luot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Đã thêm {so_luot} lượt cho ID {target_id}.\nTổng: {earned} | Đã dùng: {used} | Còn lại: {earned-used}"
     )
 
-async def cmd_mock_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if not context.args or len(context.args) < 2:
-        await update.message.reply_text(
-            "Dung: /mock_pay <ID> <so_tien> [noi_dung]\n"
-            "Vi du: /mock_pay 123456789 119000\n"
-            "Vi du: /mock_pay 123456789 50000 (chuyen thieu)"
-        ); return
-    try:
-        target_id = int(context.args[0])
-        amount    = int(context.args[1])
-    except: await update.message.reply_text("ID va so tien phai la so."); return
-    content = context.args[2] if len(context.args) > 2 else f"SEVQR VIP {target_id}"
-    if "SEVQR" not in content.upper(): content = f"SEVQR VIP {target_id}"
-    await update.message.reply_text(f"Đang xử lý thanh toán giả lập: {amount:,}d cho ID {target_id}...")
-    await process_payment(context.application, target_id, amount, ref="MOCK", content=content)
-    await update.message.reply_text("Xử lý xong. Kiem tra log va DM cua user de xac nhan.")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -2262,4 +2238,36 @@ async def main():
     async with app:
         mongo_client = await setup_db(app)
         await start_web_server(mongo_client, app)
-     
+        await app.start()
+        asyncio.create_task(expire_worker(app))
+        asyncio.create_task(unban_worker(app))
+        asyncio.create_task(vip_worker(app))
+        logging.info("Bot started!")
+        await app.updater.start_polling(
+            drop_pending_updates=True,
+            allowed_updates=[
+                "message", "chat_member", "my_chat_member",
+                "callback_query", "chat_join_request"
+            ]
+        )
+        await asyncio.Event().wait()
+
+import signal, sys
+
+def handle_signal(signum, frame):
+    logging.info(f"Nhan tin hieu {signum}, dang tat bot an toan...")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_signal)
+signal.signal(signal.SIGINT,  handle_signal)
+
+if __name__ == "__main__":
+    while True:
+        try:
+            asyncio.run(main())
+        except SystemExit:
+            logging.info("Bot da tat an toan (SystemExit).")
+            break
+        except Exception as e:
+            logging.error(f"Bot crashed: {e} - restart sau 10s...")
+            time.sleep(10)
