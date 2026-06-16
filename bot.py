@@ -1353,13 +1353,18 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             and not update.message.photo):
         return  # xu ly o handler rieng
 
-    # Forward lay ID
-    if update.message.forward_from:
-        fwd   = update.message.forward_from
-        uname = f"@{fwd.username}" if fwd.username else "Khong co"
-        await update.message.reply_text(
-            f"Thông tin:\nID: <code>{fwd.id}</code>\n"
-            f"Ten: {fwd.full_name}\nUsername: {uname}", parse_mode="HTML")
+    # Forward lay ID - PTB 21.x dung forward_origin
+    if update.message.forward_origin:
+        origin = update.message.forward_origin
+        if hasattr(origin, 'sender_user') and origin.sender_user:
+            fwd   = origin.sender_user
+            uname = f"@{fwd.username}" if fwd.username else "Không có"
+            await update.message.reply_text(
+                f"Thông tin:\nID: <code>{fwd.id}</code>\n"
+                f"Tên: {fwd.full_name}\nUsername: {uname}", parse_mode="HTML")
+        else:
+            await update.message.reply_text(
+                "Người dùng này đã ẩn thông tin cá nhân.\nKhông thể lấy ID.")
         return
 
     # Nhom thuong: Admin gui media kem #N -> luu demo
@@ -1507,7 +1512,7 @@ async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ADMIN COMMANDS ====================
 ADMIN_ONLY_CMDS = {"new","new_album","done","list","detail","check","del","del_album","clean",
-                   "setlink","dellink","ban","who","extend","viplist","status","addluot","mock_pay"}
+                   "setlink","dellink","ban","who","extend","viplist","status","addluot","addday","removeday"}
 
 async def admin_cmd_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin goc lenh he thong trong nhom thuong -> im lang ngoai nhom, DM nhac admin."""
@@ -1964,9 +1969,143 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/viplist — Danh sach VIP đang hoạt động\n"
         "/extend <ID> — Gia hạn VIP thêm 1 tháng\n\n"
         "— TEST & HỆ THỐNG —\n"
-        "/mock_pay <ID> <so_tien> — Giả lập thanh toán để test\n"
+        "/addday <ID> <số> — Cộng thêm ngày VIP\n"
+        "/removeday <ID> <số> — Trừ bớt ngày VIP\n"
         "/status — Tổng quan trạng thái\n"
         "/help — Danh sách lệnh này"
+    )
+
+async def cmd_add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("Dùng: /addday <ID> <số_ngày>\nVí dụ: /addday 123456789 7")
+        return
+    try:
+        target_id = int(context.args[0])
+        so_ngay   = int(context.args[1])
+        if so_ngay <= 0: raise ValueError
+    except ValueError:
+        await update.message.reply_text("ID và số ngày phải là số nguyên dương.")
+        return
+
+    vip_col   = get_vip(context)
+    users_col = get_users(context)
+    now       = datetime.now(timezone.utc)
+    doc       = await vip_col.find_one({"user_id": target_id})
+
+    if doc and doc.get("expire_at"):
+        ea = doc["expire_at"]
+        if ea.tzinfo is None: ea = ea.replace(tzinfo=timezone.utc)
+        base = max(ea, now)
+    else:
+        base = now
+
+    new_expire = base + timedelta(days=so_ngay)
+    d          = days_left(new_expire)
+
+    await vip_col.update_one(
+        {"user_id": target_id},
+        {"$set": {"expire_at": new_expire, "active": True,
+                  "notified_7d": False, "notified_3d": False, "notified_1d": False}},
+        upsert=True
+    )
+
+    user_doc  = await users_col.find_one({"user_id": target_id})
+    user_name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=(f"VIP của bạn đã được cộng thêm {so_ngay} ngày.\n\n"
+                  f"Hạn VIP mới: {new_expire.strftime('%d/%m/%Y')}\n"
+                  f"Số ngày còn lại: {d} ngày"),
+            protect_content=True
+        )
+    except Exception: pass
+
+    await update.message.reply_text(
+        f"Đã cộng {so_ngay} ngày VIP cho <code>{target_id}</code> ({user_name}).\n"
+        f"Hạn mới: {new_expire.strftime('%d/%m/%Y')} ({d} ngày còn lại)",
+        parse_mode="HTML"
+    )
+    await send_log(context.application,
+        f"Cộng ngày VIP\n"
+        f"ID: <code>{target_id}</code>\n"
+        f"Tên: {sanitize(user_name)}\n"
+        f"Số ngày cộng: +{so_ngay} ngày\n"
+        f"Hạn mới: {new_expire.strftime('%d/%m/%Y')}\n"
+        f"Thời gian: {now_str()}"
+    )
+
+async def cmd_remove_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("Dùng: /removeday <ID> <số_ngày>\nVí dụ: /removeday 123456789 3")
+        return
+    try:
+        target_id = int(context.args[0])
+        so_ngay   = int(context.args[1])
+        if so_ngay <= 0: raise ValueError
+    except ValueError:
+        await update.message.reply_text("ID và số ngày phải là số nguyên dương.")
+        return
+
+    vip_col   = get_vip(context)
+    users_col = get_users(context)
+    now       = datetime.now(timezone.utc)
+    doc       = await vip_col.find_one({"user_id": target_id})
+
+    if not doc or not doc.get("expire_at"):
+        await update.message.reply_text(f"ID {target_id} chưa có VIP trong hệ thống.")
+        return
+
+    ea = doc["expire_at"]
+    if ea.tzinfo is None: ea = ea.replace(tzinfo=timezone.utc)
+    new_expire = ea - timedelta(days=so_ngay)
+    d          = days_left(new_expire)
+
+    # Neu tru qua han thi set het han
+    if new_expire <= now:
+        await vip_col.update_one(
+            {"user_id": target_id},
+            {"$set": {"expire_at": now, "active": False}}
+        )
+        await update.message.reply_text(
+            f"Sau khi trừ {so_ngay} ngày, VIP của <code>{target_id}</code> đã hết hạn ngay.",
+            parse_mode="HTML"
+        )
+        return
+
+    await vip_col.update_one(
+        {"user_id": target_id},
+        {"$set": {"expire_at": new_expire}}
+    )
+
+    user_doc  = await users_col.find_one({"user_id": target_id})
+    user_name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=(f"VIP của bạn đã được điều chỉnh.\n\n"
+                  f"Hạn VIP mới: {new_expire.strftime('%d/%m/%Y')}\n"
+                  f"Số ngày còn lại: {d} ngày"),
+            protect_content=True
+        )
+    except Exception: pass
+
+    await update.message.reply_text(
+        f"Đã trừ {so_ngay} ngày VIP của <code>{target_id}</code> ({user_name}).\n"
+        f"Hạn mới: {new_expire.strftime('%d/%m/%Y')} ({d} ngày còn lại)",
+        parse_mode="HTML"
+    )
+    await send_log(context.application,
+        f"Trừ ngày VIP\n"
+        f"ID: <code>{target_id}</code>\n"
+        f"Tên: {sanitize(user_name)}\n"
+        f"Số ngày trừ: -{so_ngay} ngày\n"
+        f"Hạn mới: {new_expire.strftime('%d/%m/%Y')}\n"
+        f"Thời gian: {now_str()}"
     )
 
 async def no_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2030,7 +2169,6 @@ async def main():
     app.add_handler(CommandHandler("detail",           detail_albums,    filters=admin_filter))
     app.add_handler(CommandHandler("check",            check_album,      filters=admin_filter))
     app.add_handler(CommandHandler(["del","del_album"],delete_album,     filters=admin_filter))
-    app.add_handler(CommandHandler("clean",            clean_albums,     filters=admin_filter))
     app.add_handler(CommandHandler("setlink",          cmd_setlink,      filters=admin_filter))
     app.add_handler(CommandHandler("dellink",          cmd_dellink,      filters=admin_filter))
     app.add_handler(CommandHandler("ban",              ban_user,         filters=admin_filter))
@@ -2041,7 +2179,6 @@ async def main():
     app.add_handler(CommandHandler("status",           status_cmd,       filters=admin_filter))
     app.add_handler(CommandHandler("help",             help_cmd,         filters=admin_filter))
     app.add_handler(CommandHandler("addluot",          cmd_add_luot,     filters=admin_filter))
-    app.add_handler(CommandHandler("mock_pay",         cmd_mock_pay,     filters=admin_filter))
 
     # Member commands
     app.add_handler(CommandHandler("mua",        cmd_mua))
@@ -2125,37 +2262,4 @@ async def main():
     async with app:
         mongo_client = await setup_db(app)
         await start_web_server(mongo_client, app)
-        await app.start()
-        asyncio.create_task(expire_worker(app))
-        asyncio.create_task(unban_worker(app))
-        asyncio.create_task(vip_worker(app))
-        logging.info("Bot started!")
-        await app.updater.start_polling(
-            drop_pending_updates=True,
-            allowed_updates=[
-                "message", "chat_member", "my_chat_member",
-                "callback_query", "chat_join_request"
-            ]
-        )
-        await asyncio.Event().wait()
-
-import signal, sys
-
-def handle_signal(signum, frame):
-    logging.info(f"Nhan tin hieu {signum}, dang tat bot an toan...")
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, handle_signal)
-signal.signal(signal.SIGINT,  handle_signal)
-
-if __name__ == "__main__":
-    while True:
-        try:
-            asyncio.run(main())
-        except SystemExit:
-            logging.info("Bot da tat an toan (SystemExit).")
-            break
-        except Exception as e:
-            logging.error(f"Bot crashed: {e} - restart sau 10s...")
-            time.sleep(10)
-
+     
