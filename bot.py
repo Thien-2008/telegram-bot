@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 from aiohttp import web
 from telegram import (
     Update, InputMediaPhoto, InputMediaVideo,
@@ -106,9 +107,6 @@ def make_key():
     return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
 def make_link(key): return f"https://t.me/{BOT_USERNAME}?start={key}"
 def make_ref_link(uid): return f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
-def make_qr_img(uid):
-    return (f"https://qr.sepay.vn/img?bank={BANK_NAME}&acc={BANK_ACCOUNT}"
-            f"&template=compact&amount={VIP_PRICE}&des=SEVQR%20VIP%20{uid}")
 def make_vietqr(uid):
     # Deeplink mo app VietinBank tren dien thoai
     return (f"https://dl.vietqr.io/pay?app=vtb"
@@ -125,7 +123,6 @@ def make_qr_img(uid):
 def now_str():
     return datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
 def sanitize(text, max_len=500):
-    # Phai replace & truoc, tranh double-encode
     text = str(text).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
     return text[:max_len]+"..." if len(text)>max_len else text
 def days_left(exp):
@@ -353,6 +350,7 @@ async def grant_vip(app, user_id, user_name, username=None):
         {"user_id": user_id},
         {"$set": {"user_id": user_id, "full_name": user_name,
                   "username": username, "pending": True,
+                  "active": True,
                   "invite_url": invite_url, "invite_msg_id": None,
                   "pending_expire": expire_at,
                   "notified_7d": False, "notified_3d": False, "notified_1d": False}},
@@ -461,56 +459,57 @@ async def process_payment(app, user_id, amount, ref="", content=""):
     users_col    = app.bot_data["users_col"]
     now          = datetime.now(timezone.utc)
 
-    # Buoc 1: Cong don tien vao payments (upsert)
-    await payments_col.update_one(
-        {"user_id": user_id},
-        {"$inc": {"total_paid": amount},
-         "$push": {"transactions": {"amount": amount, "ref": ref, "content": content, "time": now}},
-         "$setOnInsert": {"granted": False}},
-        upsert=True
-    )
-
-    # Buoc 2: Doc tong tien hien tai
-    doc        = await payments_col.find_one({"user_id": user_id})
-    total_paid = doc.get("total_paid", 0) if doc else amount
-    granted    = doc.get("granted", False) if doc else False
-
-    logging.info(f"process_payment: total_paid={total_paid} granted={granted} vip_price={VIP_PRICE}")
+    # Buoc 1: Check transaction duplicate
+    if ref:
+        existing = await payments_col.find_one({"ref": ref})
+        if existing:
+            return
 
     user_doc  = await users_col.find_one({"user_id": user_id})
     user_name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
     username  = user_doc.get("username") if user_doc else None
 
-    if total_paid >= VIP_PRICE:
-        # Atomic: chi 1 luong duoc cap VIP, tranh race condition khi webhook den dong thoi
-        lock_doc = await payments_col.find_one_and_update(
-            {"user_id": user_id, "granted": False},
-            {"$set": {"granted": True}},
-            return_document=True
-        )
-        logging.info(f"process_payment: lock_doc={lock_doc is not None} user={user_id}")
-        if lock_doc:
-            logging.info(f"process_payment: granting VIP to {user_id}")
-            try:
-                result = await grant_vip(app, user_id, user_name, username)
-                logging.info(f"process_payment: grant_vip result={result}")
-            except Exception as e:
-                logging.error(f"process_payment: grant_vip exception: {e}", exc_info=True)
-        else:
-            logging.warning(
-                f"process_payment: lock_doc la None cho user {user_id}. "
-                f"Co the granted=True roi hoac user_id type mismatch. "
-                f"Doc hien tai: {await payments_col.find_one({'user_id': user_id})}"
-            )
+    # Buoc 2: Them Transaction moi
+    await payments_col.insert_one({
+        "ref": ref,
+        "user_id": user_id,
+        "amount": amount,
+        "content": content,
+        "time": now,
+        "action_done": False
+    })
 
-    elif total_paid < VIP_PRICE and not granted:
-        con_thieu = VIP_PRICE - total_paid
-        await log_payment_partial(app, user_id, amount, total_paid)
+    # Buoc 3: Tính toán tổng tiền các giao dịch chưa xử lý (action_done=False)
+    cursor = payments_col.find({"user_id": user_id, "action_done": False})
+    total_pending = 0
+    pending_ids = []
+    async for tx in cursor:
+        total_pending += tx["amount"]
+        pending_ids.append(tx["_id"])
+
+    logging.info(f"process_payment: total_pending={total_pending} vip_price={VIP_PRICE}")
+
+    if total_pending >= VIP_PRICE:
+        # Atomic lock status
+        await payments_col.update_many(
+            {"_id": {"$in": pending_ids}},
+            {"$set": {"action_done": True}}
+        )
+        logging.info(f"process_payment: granting VIP to {user_id}")
+        try:
+            result = await grant_vip(app, user_id, user_name, username)
+            logging.info(f"process_payment: grant_vip result={result}")
+        except Exception as e:
+            logging.error(f"process_payment: grant_vip exception: {e}", exc_info=True)
+
+    elif total_pending < VIP_PRICE:
+        con_thieu = VIP_PRICE - total_pending
+        await log_payment_partial(app, user_id, amount, total_pending)
         try:
             await app.bot.send_message(
                 chat_id=user_id,
                 text=(f"Đã nhận {amount:,}đ\n"
-                      f"Tổng đã nhận: {total_paid:,}đ\n"
+                      f"Tổng đã nhận: {total_pending:,}đ\n"
                       f"Còn thiếu: {con_thieu:,}đ\n\n"
                       f"Vui lòng chuyển thêm để hoàn tất."),
                 protect_content=True
@@ -573,9 +572,41 @@ async def unban_worker(app):
 
 async def vip_worker(app):
     vip_col = app.bot_data["vip_col"]
+    referral_jobs_col = app.bot_data["referral_jobs_col"]
+    users_col = app.bot_data["users_col"]
+    try: _gid = int(GROUP_ID) if GROUP_ID else None
+    except: _gid = None
+
     while True:
         try:
             now = datetime.now(timezone.utc)
+
+            # --- Xu ly Referral Render-Safe ---
+            if _gid:
+                async for job in referral_jobs_col.find({"check_at": {"$lte": now}, "processed": False}):
+                    new_uid = job["new_uid"]
+                    ref_by = job["ref_by"]
+                    try:
+                        m = await app.bot.get_chat_member(chat_id=_gid, user_id=new_uid)
+                        if m.status not in ("left", "kicked", "banned"):
+                            ref_doc = await users_col.find_one({"user_id": ref_by})
+                            if ref_doc and ref_doc.get("invite_earned", 0) < 15:
+                                await users_col.update_one({"user_id": ref_by}, {"$inc": {"invite_earned": 1}})
+                                updated = await users_col.find_one({"user_id": ref_by})
+                                earned  = updated.get("invite_earned", 0)
+                                try:
+                                    await app.bot.send_message(
+                                        chat_id=ref_by,
+                                        text=f"Người bạn giới thiệu đã ở lại nhóm đủ 24 giờ.\nBạn nhận được 1 lượt xem.\nTổng lượt hiện tại: {earned}/15",
+                                        protect_content=True
+                                    )
+                                except Exception: pass
+                    except Exception as e:
+                        logging.error(f"Referral check member error: {e}")
+                    await referral_jobs_col.update_one({"_id": job["_id"]}, {"$set": {"processed": True}})
+            # ----------------------------------
+
+            # --- Xu ly VIP Expiration ---
             for db, field, msg in [
                 (7,"notified_7d","Goi VIP cua ban sẽ hết hạn sau 7 ngày."),
                 (3,"notified_3d","Goi VIP cua ban sẽ hết hạn sau 3 ngày."),
@@ -593,6 +624,7 @@ async def vip_worker(app):
                         )
                         await vip_col.update_one({"_id": doc["_id"]}, {"$set": {field: True}})
                     except Exception: pass
+
             async for doc in vip_col.find({"expire_at": {"$lte": now}, "active": True}):
                 uid = doc["user_id"]
                 try:
@@ -606,7 +638,7 @@ async def vip_worker(app):
                         protect_content=True
                     )
                 except Exception: pass
-                # Giu nguyen data, chi set active=False
+                
                 await vip_col.update_one(
                     {"_id": doc["_id"]},
                     {"$set": {"active": False, "expired_at": now}}
@@ -616,25 +648,7 @@ async def vip_worker(app):
                     f"Ten: {sanitize(doc.get('full_name',''))}\nThời gian: {now_str()}"
                 )
         except Exception as e: logging.error(f"VIP worker: {e}")
-        await asyncio.sleep(3600)
-
-async def process_referral_after_24h(app, new_uid, ref_by):
-    await asyncio.sleep(86400)
-    users_col = app.bot_data["users_col"]
-    ref_doc   = await users_col.find_one({"user_id": ref_by})
-    if not ref_doc: return
-    if ref_doc.get("invite_earned", 0) >= 15: return
-    await users_col.update_one({"user_id": ref_by}, {"$inc": {"invite_earned": 1}})
-    try:
-        updated = await users_col.find_one({"user_id": ref_by})
-        earned  = updated.get("invite_earned", 0)
-        await app.bot.send_message(
-            chat_id=ref_by,
-            text=f"Người bạn giới thiệu đã ở lại nhóm đủ 24 giờ.\n"
-                 f"Bạn nhận được 1 lượt xem.\nTổng lượt hiện tại: {earned}/15",
-            protect_content=True
-        )
-    except Exception: pass
+        await asyncio.sleep(60)
 
 async def kick_if_not_confirmed(app, chat_id, user_id, message_id):
     await asyncio.sleep(60)
@@ -680,7 +694,6 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
     # NHOM THUONG
     if _gid and result.chat.id == _gid:
         logging.info(f"ChatMember nhom thuong: {user.id} {old_status} -> {new_status}")
-        # Them "restricted" vi Telegram doi khi tra ve restricted thay vi member khi rejoin
         if (old_status in ("left","kicked") and
                 new_status in ("member","restricted")):
             banned_col = get_banned(context)
@@ -712,7 +725,7 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 msg = await context.bot.send_message(chat_id=_gid, text=rules_text, reply_markup=kb)
                 users_col = get_users(context)
-                # Luon reset is_muted=True va rules_confirmed=False khi rejoin
+                
                 await users_col.update_one(
                     {"user_id": user.id},
                     {"$set": {"user_id": user.id, "username": user.username,
@@ -738,7 +751,6 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
             doc       = await vip_col.find_one({"user_id": user.id})
             expire_at = doc.get("pending_expire") if doc else None
             if not expire_at:
-                # Bao ton data cu neu co
                 old_ea = doc.get("expire_at") if doc else None
                 if old_ea and not doc.get("active", False):
                     if old_ea.tzinfo is None: old_ea = old_ea.replace(tzinfo=timezone.utc)
@@ -754,11 +766,9 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
                           "notified_7d": False, "notified_3d": False, "notified_1d": False}},
                 upsert=True
             )
-            # Xoa nut invite sau khi da vao thanh cong
             invite_msg_id = doc.get("invite_msg_id") if doc else None
             invite_url_old = doc.get("invite_url") if doc else None
 
-            # Xoa nut invite sau khi user vao thanh cong
             if invite_msg_id:
                 try:
                     await context.bot.edit_message_reply_markup(
@@ -766,7 +776,6 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
                     )
                 except Exception: pass
 
-            # Revoke link invite de don dep tai nguyen
             if invite_url_old:
                 try:
                     await context.bot.revoke_chat_invite_link(
@@ -775,12 +784,10 @@ async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception: pass
 
         elif old_status == "member" and new_status == "left":
-            # Bao ton data, chi set active=False
             await vip_col.update_one({"user_id": user.id}, {"$set": {"active": False}})
 
 # ==================== JOIN REQUEST HANDLER ====================
 async def new_chat_members_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fallback: bat su kien thanh vien moi/rejoin qua StatusUpdate."""
     try: _gid = int(GROUP_ID) if GROUP_ID else None
     except: _gid = None
     if not _gid or update.effective_chat.id != _gid: return
@@ -793,12 +800,11 @@ async def new_chat_members_fallback(update: Update, context: ContextTypes.DEFAUL
             try: await context.bot.ban_chat_member(chat_id=_gid, user_id=new_member.id)
             except Exception: pass
             continue
-        # Kiem tra da mute chua (tranh xu ly trung voi ChatMemberHandler)
+            
         users_col = context.application.bot_data["users_col"]
         user_doc  = await users_col.find_one({"user_id": new_member.id})
         if user_doc and user_doc.get("is_muted"):
-            continue  # ChatMemberHandler da xu ly roi
-        # Mute + gui noi quy
+            continue 
         try:
             await context.bot.restrict_chat_member(
                 chat_id=_gid, user_id=new_member.id, permissions=MUTED
@@ -852,11 +858,10 @@ async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     vip_col = context.application.bot_data["vip_col"]
     if str(req.chat.id) != str(CHANNEL_ID): return
 
-    # Atomic findOneAndUpdate: chi 1 request duoc approve, chong spam click
     doc = await vip_col.find_one_and_update(
         {"user_id": user_id, "pending": True},
         {"$set": {"pending": False}},
-        return_document=True
+        return_document=ReturnDocument.AFTER
     )
     if doc:
         try:
@@ -905,13 +910,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_col = get_users(context)
         user_doc  = await users_col.find_one({"user_id": target_id})
 
-        # Chi xu ly neu dang bi mute (nguoi moi)
         if not user_doc or not user_doc.get("is_muted", False):
-            # Nguoi cu bam nham - bo qua hoan toan, khong log
             await query.answer()
             return
 
-        # Nguoi moi dang bi mute - xu ly
         await users_col.update_one(
             {"user_id": target_id},
             {"$set": {"is_muted": False, "rules_confirmed": True}}
@@ -933,12 +935,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await users_col.update_one({"user_id": target_id}, {"$set": {"rules_confirmed_before": True}})
         await log_rules_confirm(context.application, target_id,
                                 user_doc.get("full_name",""), user_doc.get("username"), status_txt)
+        
+        # Add to referral jobs securely for background processing
         ref_by = user_doc.get("ref_by")
         if ref_by:
-            asyncio.create_task(process_referral_after_24h(context.application, target_id, ref_by))
+            referral_jobs_col = context.application.bot_data["referral_jobs_col"]
+            await referral_jobs_col.insert_one({
+                "new_uid": target_id,
+                "ref_by": ref_by,
+                "check_at": datetime.now(timezone.utc) + timedelta(seconds=86400),
+                "processed": False
+            })
         return
 
-    # Ban pha 2 - xac nhan thoi gian
+    # Ban pha 2
     if data.startswith("ban_enter_time_") and user.id == ADMIN_ID:
         admin_id = int(data.split("_")[3])
         if admin_id != ADMIN_ID: await query.answer(); return
@@ -951,7 +961,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Nhập thời gian cấm ben duoi.")
         return
 
-    # Demo chon bo
+    # Demo
     if data.startswith("demo_"):
         number = int(data.split("_")[1])
         asyncio.create_task(send_demo(context.application, user.id, number, query))
@@ -966,7 +976,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app  = context.application
     await save_user(context, user)
 
-    # Check pending_notification: gui lai link VIP neu truoc do bi loi Forbidden
     vip_col_check = context.application.bot_data["vip_col"]
     pend_doc = await vip_col_check.find_one({
         "user_id": uid,
@@ -1020,7 +1029,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args or []
 
-    # Xu ly referral
     if args and args[0].startswith("ref_"):
         try:
             ref_id = int(args[0].replace("ref_",""))
@@ -1032,14 +1040,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError: pass
         args = []
 
-    # /start khong co args - tat ca user chi thay chao + /help
     if not args:
         await temp_reply(update, context,
             f"Chào mừng bạn đến với hệ thống.\n\nGõ /help để xem danh sách lệnh và hướng dẫn sử dụng.",
             delay=120)
         return
 
-    # Deep link xem noi dung
     key        = args[0]
     albums_col = get_albums(context)
     try: album = await db_retry(lambda: albums_col.find_one({"key": key}))
@@ -1080,7 +1086,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Username: {'@'+user.username if user.username else 'Khong co'}\n"
         f"Album: <code>{key}</code>\nThời gian: {now_str()}"
     )
-    # Luu tong luot xem
     users_col = get_users(context)
     await users_col.update_one({"user_id": uid}, {"$inc": {"total_views": 1}})
     await send_album(context, uid, album)
@@ -1088,7 +1093,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_album(context, uid, album):
     items    = album.get("items",[])
     if not items: return
-    # Tinh dynamic timeout
     total_sec = sum(it.get("duration",0) for it in items if it["type"]=="video")
     delete_after = total_sec + BUFFER_MINUTES * 60
 
@@ -1208,7 +1212,7 @@ async def cmd_mua(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await save_user(context, user)
     await log_mua(context.application, user)
 
-    qr_img_url = make_qr_img(user.id)
+    qr_img_url = make_vietqr(user.id)
     kb_qr = InlineKeyboardMarkup([[
         InlineKeyboardButton("Xem mã QR thanh toán", url=qr_img_url)
     ]])
@@ -1289,7 +1293,6 @@ async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
     demos_col = get_demos(context)
 
-    # Neu co so bo
     number = None
     if args:
         raw = args[0].lstrip("#").strip()
@@ -1300,7 +1303,6 @@ async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(send_demo(context.application, user.id, number))
         return
 
-    # Hien danh sach bo co san
     users_col = get_users(context)
     doc = await users_col.find_one({"user_id": user.id})
     if not doc:
@@ -1351,23 +1353,8 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             and update.message.reply_to_message
             and not update.message.video
             and not update.message.photo):
-        return  # xu ly o handler rieng
-
-    # Forward lay ID - PTB 21.x dung forward_origin
-    if update.message.forward_origin:
-        origin = update.message.forward_origin
-        if hasattr(origin, 'sender_user') and origin.sender_user:
-            fwd   = origin.sender_user
-            uname = f"@{fwd.username}" if fwd.username else "Không có"
-            await update.message.reply_text(
-                f"Thông tin:\nID: <code>{fwd.id}</code>\n"
-                f"Tên: {fwd.full_name}\nUsername: {uname}", parse_mode="HTML")
-        else:
-            await update.message.reply_text(
-                "Người dùng này đã ẩn thông tin cá nhân.\nKhông thể lấy ID.")
         return
 
-    # Nhom thuong: Admin gui media kem #N -> luu demo
     try: _gid = int(GROUP_ID) if GROUP_ID else None
     except: _gid = None
     if _gid and update.effective_chat.id == _gid:
@@ -1411,6 +1398,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_type = "photo"
         duration  = 0
     else: return
+    
     await albums_col.update_one(
         {"key": key},
         {"$push": {"items": {"type": file_type, "file_id": file_id, "duration": duration}}}
@@ -1422,7 +1410,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handler nhan ForceReply thoi gian ban
 async def handle_text_hashtag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bat text thuần có #N trong nhóm thường."""
+    if update.effective_chat.type == "private": return
+    if update.effective_chat.type not in ("group", "supergroup"): return
     if update.effective_user.id != ADMIN_ID: return
+
     try: _gid = int(GROUP_ID) if GROUP_ID else None
     except: _gid = None
     if not _gid or update.effective_chat.id != _gid: return
@@ -1439,7 +1430,6 @@ async def handle_text_hashtag(update: Update, context: ContextTypes.DEFAULT_TYPE
         upsert=True
     )
     await update.message.reply_text("Da ghi nhan bo #" + str(number) + ".\nDùng /setlink " + str(number) + " [KEY] để liên kết album full.")
-
 
 
 async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1470,8 +1460,6 @@ async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: _gid = None
 
     if _gid:
-        # Clamp: Telegram yeu cau 30s < until_date < 366 ngay
-        # Neu ngoai khoang nay, Telegram tu dong hieu la ban vinh vien
         raw_secs = dur.total_seconds()
         clamped  = max(31, min(raw_secs, 365 * 24 * 3600))
         if clamped != raw_secs:
@@ -1511,8 +1499,8 @@ async def handle_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Đã cấm {target_name} {expire_info}.\nLý do: {reason}")
 
 # ==================== ADMIN COMMANDS ====================
-ADMIN_ONLY_CMDS = {"new","new_album","done","list","detail","check","del","del_album","clean",
-                   "setlink","dellink","ban","who","extend","viplist","status","addluot","addday","removeday"}
+ADMIN_ONLY_CMDS = {"new","new_album","done","list","detail","check","del","del_album",
+                   "setlink","dellink","ban","who","extend","viplist","status","addluot","addday","delday"}
 
 async def admin_cmd_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin goc lenh he thong trong nhom thuong -> im lang ngoai nhom, DM nhac admin."""
@@ -1525,7 +1513,7 @@ async def admin_cmd_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=f"Lệnh /{cmd} chỉ hoạt động trong chat riêng với bot.\nVui lòng chat riêng với bot để sử dụng."
-            )
+             )
         except Exception: pass
 
 async def new_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1615,7 +1603,6 @@ async def delete_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await get_jobs(context).delete_many({"album_key": key})
     await update.message.reply_text(f"Đã xóa album {key}." if r.deleted_count else f"Không tìm thấy {key}.")
 
-
 async def cmd_setlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     if update.effective_chat.type != "private":
@@ -1662,7 +1649,6 @@ async def cmd_dellink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    # Neu goc trong nhom thuong -> im lang
     if update.effective_chat.type in ("group","supergroup"):
         try: await update.message.delete()
         except Exception: pass
@@ -1914,7 +1900,6 @@ async def cmd_add_luot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Đã thêm {so_luot} lượt cho ID {target_id}.\nTổng: {earned} | Đã dùng: {used} | Còn lại: {earned-used}"
     )
 
-
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     await update.message.reply_text(
@@ -1925,8 +1910,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list — Danh sách album\n"
         "/detail — Album kèm link\n"
         "/check <ma> — Thong tin album\n"
-        "/del <ma> — Xóa album\n"
-        "/clean — Xóa album cu hon 7 ngay\n\n"
+        "/del <ma> — Xóa album\n\n"
         "— DEMO SYSTEM —\n"
         "/setlink <so> <key> — Liên kết bộ demo với album full\n"
         "  Vi du: /setlink 1 abc123xyz\n"
@@ -1946,13 +1930,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/extend <ID> — Gia hạn VIP thêm 1 tháng\n\n"
         "— TEST & HỆ THỐNG —\n"
         "/addday <ID> <số> — Cộng thêm ngày VIP\n"
-        "/removeday <ID> <số> — Trừ bớt ngày VIP\n"
+        "/delday <ID> <số> — Trừ bớt ngày VIP\n"
         "/status — Tổng quan trạng thái\n"
         "/help — Danh sách lệnh này"
     )
 
 async def cmd_add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
+    if update.effective_chat.type != "private":
+        await admin_cmd_in_group(update, context); return
     if not context.args or len(context.args) < 2:
         await update.message.reply_text("Dùng: /addday <ID> <số_ngày>\nVí dụ: /addday 123456789 7")
         return
@@ -1989,16 +1975,6 @@ async def cmd_add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_doc  = await users_col.find_one({"user_id": target_id})
     user_name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
 
-    try:
-        await context.bot.send_message(
-            chat_id=target_id,
-            text=(f"VIP của bạn đã được cộng thêm {so_ngay} ngày.\n\n"
-                  f"Hạn VIP mới: {new_expire.strftime('%d/%m/%Y')}\n"
-                  f"Số ngày còn lại: {d} ngày"),
-            protect_content=True
-        )
-    except Exception: pass
-
     await update.message.reply_text(
         f"Đã cộng {so_ngay} ngày VIP cho <code>{target_id}</code> ({user_name}).\n"
         f"Hạn mới: {new_expire.strftime('%d/%m/%Y')} ({d} ngày còn lại)",
@@ -2013,10 +1989,12 @@ async def cmd_add_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Thời gian: {now_str()}"
     )
 
-async def cmd_remove_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_del_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
+    if update.effective_chat.type != "private":
+        await admin_cmd_in_group(update, context); return
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text("Dùng: /removeday <ID> <số_ngày>\nVí dụ: /removeday 123456789 3")
+        await update.message.reply_text("Dùng: /delday <ID> <số_ngày>\nVí dụ: /delday 123456789 3")
         return
     try:
         target_id = int(context.args[0])
@@ -2040,7 +2018,6 @@ async def cmd_remove_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_expire = ea - timedelta(days=so_ngay)
     d          = days_left(new_expire)
 
-    # Neu tru qua han thi set het han
     if new_expire <= now:
         await vip_col.update_one(
             {"user_id": target_id},
@@ -2059,16 +2036,6 @@ async def cmd_remove_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_doc  = await users_col.find_one({"user_id": target_id})
     user_name = user_doc.get("full_name","Không rõ") if user_doc else "Không rõ"
-
-    try:
-        await context.bot.send_message(
-            chat_id=target_id,
-            text=(f"VIP của bạn đã được điều chỉnh.\n\n"
-                  f"Hạn VIP mới: {new_expire.strftime('%d/%m/%Y')}\n"
-                  f"Số ngày còn lại: {d} ngày"),
-            protect_content=True
-        )
-    except Exception: pass
 
     await update.message.reply_text(
         f"Đã trừ {so_ngay} ngày VIP của <code>{target_id}</code> ({user_name}).\n"
@@ -2109,9 +2076,11 @@ async def setup_db(app):
         "vip_col":      db["vip_members"],
         "payments_col": db["payments"],
         "demos_col":    db["demos"],
+        "referral_jobs_col": db["referral_jobs"],
     }
     for k, v in cols.items(): app.bot_data[k] = v
     app.bot_data["mongo_client"] = client
+    
     await db["albums"].create_index("key", unique=True)
     await db["jobs"].create_index([("expire_at",1),("done",1)])
     await db["banned"].create_index("user_id", unique=True)
@@ -2119,8 +2088,9 @@ async def setup_db(app):
     await db["users"].create_index("user_id", unique=True)
     await db["vip_members"].create_index("user_id", unique=True)
     await db["vip_members"].create_index([("expire_at",1),("active",1)])
-    await db["payments"].create_index("user_id", unique=True)
     await db["demos"].create_index("number", unique=True)
+    await db["referral_jobs"].create_index([("check_at",1), ("processed",1)])
+    
     logging.info("DB connected!")
     return client
 
@@ -2130,7 +2100,6 @@ async def main():
     app          = Application.builder().token(TOKEN).build()
     admin_filter = filters.User(user_id=ADMIN_ID)
 
-    # Khai bao _gid_int o dau main() de dung xuyen suot
     try:
         _gid_int = int(GROUP_ID) if GROUP_ID else None
     except Exception:
@@ -2155,6 +2124,8 @@ async def main():
     app.add_handler(CommandHandler("status",           status_cmd,       filters=admin_filter))
     app.add_handler(CommandHandler("help",             help_cmd,         filters=admin_filter))
     app.add_handler(CommandHandler("addluot",          cmd_add_luot,     filters=admin_filter))
+    app.add_handler(CommandHandler("addday",           cmd_add_day,      filters=admin_filter))
+    app.add_handler(CommandHandler("delday",           cmd_del_day,      filters=admin_filter))
 
     # Member commands
     app.add_handler(CommandHandler("mua",        cmd_mua))
@@ -2163,8 +2134,7 @@ async def main():
     app.add_handler(CommandHandler("xem",        cmd_xem))
     app.add_handler(CommandHandler("help",       cmd_help_user, filters=~admin_filter))
 
-    # Media handler (admin - ca DM lan nhom thuong)
-    # Handler media: dung CaptionRegex de bot nhan caption so trong nhom thuong
+    # Media handler
     if _gid_int:
         app.add_handler(MessageHandler(
             (filters.VIDEO | filters.PHOTO) &
@@ -2173,22 +2143,20 @@ async def main():
             admin_filter,
             handle_media
         ), group=0)
-    # Handler media DM admin (forward lay ID + tao album)
+        
     app.add_handler(MessageHandler(
         (filters.VIDEO | filters.PHOTO | filters.FORWARDED) &
         admin_filter &
         filters.ChatType.PRIVATE,
         handle_media
     ), group=0)
-    # Bat so thuan tuy trong nhom thuong (chi admin, chi trong GROUP_ID)
+    
     if _gid_int:
         app.add_handler(MessageHandler(
             filters.Regex(r'^\d+') & filters.Chat(_gid_int) & admin_filter,
             handle_text_hashtag
         ))
 
-    # ForceReply handler - ban pha 2
-    # handle_ban_time phai o group=0 va add truoc cac handler text khac
     app.add_handler(MessageHandler(
         filters.REPLY & filters.TEXT & admin_filter & filters.ChatType.PRIVATE,
         handle_ban_time
@@ -2199,7 +2167,6 @@ async def main():
 
     # ChatMember
     app.add_handler(ChatMemberHandler(chat_member_updated, ChatMemberHandler.CHAT_MEMBER))
-    # Fallback: bat NEW_CHAT_MEMBERS phong khi ChatMemberHandler miss rejoin
     app.add_handler(MessageHandler(
         filters.StatusUpdate.NEW_CHAT_MEMBERS,
         new_chat_members_fallback
@@ -2211,16 +2178,13 @@ async def main():
     # Non-admin lenh
     app.add_handler(MessageHandler(filters.COMMAND & ~admin_filter, no_permission))
 
-    # Global error handler - log traceback day du
+    # Global error handler
     async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         import traceback as _tb
         tb_str = "".join(_tb.format_exception(
             None, context.error, context.error.__traceback__
         ))
-        # Log ra Render
         logging.error(f"=== UNHANDLED EXCEPTION ===\n{tb_str}")
-
-        # Gui vao nhom log admin
         if LOG_GROUP_ID:
             try:
                 await app.bot.send_message(
@@ -2238,36 +2202,11 @@ async def main():
     async with app:
         mongo_client = await setup_db(app)
         await start_web_server(mongo_client, app)
-        await app.start()
+        
+        # Start Worker Threads in Background
         asyncio.create_task(expire_worker(app))
         asyncio.create_task(unban_worker(app))
         asyncio.create_task(vip_worker(app))
-        logging.info("Bot started!")
-        await app.updater.start_polling(
-            drop_pending_updates=True,
-            allowed_updates=[
-                "message", "chat_member", "my_chat_member",
-                "callback_query", "chat_join_request"
-            ]
-        )
+        
+        # Keep process running
         await asyncio.Event().wait()
-
-import signal, sys
-
-def handle_signal(signum, frame):
-    logging.info(f"Nhan tin hieu {signum}, dang tat bot an toan...")
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, handle_signal)
-signal.signal(signal.SIGINT,  handle_signal)
-
-if __name__ == "__main__":
-    while True:
-        try:
-            asyncio.run(main())
-        except SystemExit:
-            logging.info("Bot da tat an toan (SystemExit).")
-            break
-        except Exception as e:
-            logging.error(f"Bot crashed: {e} - restart sau 10s...")
-            time.sleep(10)
